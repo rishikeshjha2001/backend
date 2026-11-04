@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+
+# TypeScript build output
+dist/
+build/
+*.tsbuildinfo
+
+# Environment Variables & Secrets
+.env
+.env.local
+.env.*
+!.env.example
+
+# Backups & dumps
+backups/
+*.log
+*.tmp
+*.tar.gz
+*.zip
+
+# OS files
+.DS_Store
+Thumbs.db

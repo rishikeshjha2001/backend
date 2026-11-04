@@ -1,0 +1,756 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+// ==========================================
+// USERS & AUTH
+// ==========================================
+
+model User {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  phone         String?
+  gender        String?
+  role          String    @default("USER")
+  profileImage  String?
+  referralCode  String?   @unique
+  walletBalance Float     @default(0)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  bookings      Booking[]
+  eventBookings EventBooking[]
+  notifications UserNotification[]
+  deviceTokens  DeviceToken[]
+}
+
+model Admin {
+  id            String    @id @default(cuid())
+  name          String
+  email         String    @unique
+  passwordHash  String
+  role          String    @default("SUPER_ADMIN")
+  createdAt     DateTime  @default(now())
+
+  auditLogs     AuditLog[]
+}
+
+// ==========================================
+// MANAGERS & INTERNAL COMMS
+// ==========================================
+
+model Manager {
+  id            String    @id @default(cuid())
+  hlpId         String    @unique
+  name          String
+  email         String    @unique
+  passwordHash  String
+  phone         String
+  location      String    // The designated area for this manager
+  role          String    @default("MANAGER")
+  isActive      Boolean   @default(true)
+  createdAt     DateTime  @default(now())
+
+  partners      Partner[]
+  notes         ManagerNote[]
+}
+
+model ManagerNote {
+  id          String   @id @default(cuid())
+  managerId   String
+  manager     Manager  @relation(fields: [managerId], references: [id])
+  title       String
+  content     String
+  reminderAt  DateTime?
+  status      String   @default("PENDING") // PENDING, COMPLETED
+  createdAt   DateTime @default(now())
+}
+
+model Message {
+  id           String   @id @default(cuid())
+  senderId     String
+  senderRole   String   // USER, ADMIN, MANAGER
+  receiverId   String
+  receiverRole String   // USER, ADMIN, MANAGER
+  content      String
+  isRead       Boolean  @default(false)
+  createdAt    DateTime @default(now())
+}
+
+// ==========================================
+// PARTNERS & SUBSCRIPTIONS
+// ==========================================
+
+model Partner {
+  id             String    @id @default(cuid())
+  hlpId          String    @unique
+  name           String
+  email          String    @unique
+  passwordHash   String
+  phone          String
+  businessName   String
+  categories     String[]
+  location       String
+  image          String?
+  imageUrl       String?
+  isVerified     Boolean   @default(false)
+  status         String    @default("PENDING") // PENDING, UNDER_REVIEW, VERIFIED, SUSPENDED, REJECTED, INACTIVE
+
+  subscriptionStatus String @default("INACTIVE")
+  subscriptionEnd    DateTime?
+  referralCode       String?   @unique
+  referredByCode     String?
+  walletBalance      Float     @default(0)
+
+  // KYC & Bank Details
+  ownerName      String?
+  gstNumber      String?
+  panNumber      String?
+  bankAccount    String?
+  bankIfsc       String?
+
+  createdAt      DateTime  @default(now())
+
+  managerId      String?
+  manager        Manager?  @relation(fields: [managerId], references: [id])
+
+  bills          Bill[]
+  venues         Venue[]
+  bookings       Booking[] @relation("PartnerBookings")
+  subscriptions  PartnerSubscription[]
+  notifications  PartnerNotification[]
+  deviceTokens   DeviceToken[]
+  payouts        Payout[]
+  services       PartnerService[]
+}
+
+// ==========================================
+// PARTNER SERVICES & OTP
+// ==========================================
+
+model PartnerService {
+  id             String    @id @default(cuid())
+  partnerId      String
+  partner        Partner   @relation(fields: [partnerId], references: [id])
+  name           String
+  description    String
+  category       String    // VENUE, CATERING, DECORATION, DJ, PHOTOGRAPHY, MEHENDI, MAKEUP, CHOREOGRAPHY, OTHER
+  subCategory    String?
+  pricing        Float
+  pricingUnit    String    @default("PER_EVENT") // PER_EVENT, PER_HOUR, PER_PLATE, PER_DAY
+  capacity       Int?      // Max guests / capacity
+  images         String[]
+  documents      String[]  // GST cert, trade license, etc.
+  features       String[]  // e.g. ["AC Hall", "Parking", "Valet"]
+  location       String
+  city           String
+  availability   String    @default("AVAILABLE") // AVAILABLE, BOOKED, UNAVAILABLE
+  status         String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED, SUSPENDED
+  adminRemarks   String?
+  rating         Float     @default(0)
+  totalBookings  Int       @default(0)
+  isActive       Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([partnerId])
+  @@index([category])
+  @@index([city])
+  @@index([status])
+}
+
+model PartnerOtp {
+  id          String   @id @default(cuid())
+  phone       String
+  otp         String
+  purpose     String   @default("PHONE_VERIFY") // PHONE_VERIFY, LOGIN
+  verified    Boolean  @default(false)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+
+  @@index([phone])
+}
+
+model SubscriptionPlan {
+  id              String    @id @default(cuid())
+  name            String
+  amount          Float
+  currency        String    @default("INR")
+  billingInterval String    @default("MONTHLY") // MONTHLY, YEARLY
+  features        String[]
+  active          Boolean   @default(true)
+  version         Int       @default(1)
+  createdAt       DateTime  @default(now())
+
+  partnerSubscriptions PartnerSubscription[]
+}
+
+model PartnerSubscription {
+  id                String    @id @default(cuid())
+  partnerId         String
+  partner           Partner   @relation(fields: [partnerId], references: [id])
+  planId            String?
+  plan              SubscriptionPlan? @relation(fields: [planId], references: [id])
+  amount            Float
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  status            String    @default("PENDING") // PENDING, ACTIVE, EXPIRED, CANCELLED, FAILED, RESTRICTED
+  startDate         DateTime?
+  endDate           DateTime?
+  createdAt         DateTime  @default(now())
+  
+  events            SubscriptionEvent[]
+}
+
+model SubscriptionEvent {
+  id             String    @id @default(cuid())
+  subscriptionId String
+  subscription   PartnerSubscription @relation(fields: [subscriptionId], references: [id])
+  eventType      String    // CREATED, RENEWED, FAILED, EXPIRED
+  payload        Json?
+  createdAt      DateTime  @default(now())
+}
+
+// ==========================================
+// BUSINESS: BOOKINGS, ORDERS, LEDGER
+// ==========================================
+
+model Booking {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  venueId     String?
+  venue       Venue?   @relation(fields: [venueId], references: [id])
+  partnerId   String
+  partner     Partner  @relation("PartnerBookings", fields: [partnerId], references: [id])
+  date        DateTime
+  status      String   @default("PENDING") // PENDING, CONFIRMED, CANCELLED, COMPLETED
+  
+  // Pricing Breakdown
+  baseAmount      Float
+  platformFee     Float    @default(0)
+  taxAmount       Float    @default(0)
+  discountAmount  Float    @default(0)
+  totalAmount     Float
+
+  // Tracking
+  referralCodeUsed String? // The specific QR/Link code used by the customer
+  ticketId         String?   @unique // Generated Digital Ticket ID (hlc...)
+
+  razorpayOrderId   String?
+  razorpayPaymentId String?
+  paymentStatus     String @default("PENDING") // PENDING, AUTHORIZED, CAPTURED, FAILED, CANCELLED, REFUNDED
+  
+  createdAt   DateTime @default(now())
+
+  events      BookingEvent[]
+  payments    Payment[]
+
+  @@index([userId])
+  @@index([partnerId])
+  @@index([date])
+  @@index([status])
+}
+
+model BookingEvent {
+  id          String   @id @default(cuid())
+  bookingId   String
+  booking     Booking  @relation(fields: [bookingId], references: [id])
+  eventType   String   // CREATED, PAYMENT_INITIATED, PAYMENT_CAPTURED, PARTNER_NOTIFIED, CONFIRMED, CANCELLED, REFUNDED
+  description String?
+  createdAt   DateTime @default(now())
+}
+
+model Payment {
+  id                String   @id @default(cuid())
+  bookingId         String?
+  booking           Booking? @relation(fields: [bookingId], references: [id])
+  amount            Float
+  currency          String   @default("INR")
+  status            String   @default("CREATED") // CREATED, PENDING, AUTHORIZED, CAPTURED, FAILED, CANCELLED, REFUND_PENDING, REFUNDED
+  razorpayOrderId   String?  @unique
+  razorpayPaymentId String?  @unique
+  razorpaySignature String?
+  method            String?
+  capturedAt        DateTime?
+  createdAt         DateTime @default(now())
+
+  events            PaymentEvent[]
+  refunds           Refund[]
+}
+
+model PaymentEvent {
+  id          String   @id @default(cuid())
+  paymentId   String
+  payment     Payment  @relation(fields: [paymentId], references: [id])
+  status      String
+  payload     Json?
+  createdAt   DateTime @default(now())
+}
+
+model Refund {
+  id               String   @id @default(cuid())
+  paymentId        String
+  payment          Payment  @relation(fields: [paymentId], references: [id])
+  amount           Float
+  reason           String?
+  status           String   @default("PENDING") // PENDING, PROCESSED, FAILED
+  razorpayRefundId String?  @unique
+  createdAt        DateTime @default(now())
+}
+
+model Payout {
+  id               String   @id @default(cuid())
+  partnerId        String
+  partner          Partner  @relation(fields: [partnerId], references: [id])
+  amount           Float
+  status           String   @default("PENDING") // PENDING, PROCESSING, PROCESSED, FAILED
+  referenceId      String?
+  settlementDate   DateTime?
+  createdAt        DateTime @default(now())
+}
+
+model FinancialLedger {
+  id          String   @id @default(cuid())
+  type        String   // CREDIT, DEBIT
+  entityId    String   // Booking ID, Payout ID, Subscription ID
+  entityType  String   // BOOKING, PAYOUT, SUBSCRIPTION
+  amount      Float
+  balanceAfter Float?
+  description String
+  createdAt   DateTime @default(now())
+}
+
+model ReconciliationRecord {
+  id             String   @id @default(cuid())
+  type           String   // PAYMENT, REFUND
+  externalId     String   // Razorpay ID
+  internalId     String?  // Our DB ID
+  status         String   // MATCHED, MISMATCH, MISSING_INTERNAL, MISSING_EXTERNAL
+  discrepancies  Json?
+  createdAt      DateTime @default(now())
+}
+
+model Bill {
+  id             String    @id @default(cuid())
+  partnerId      String
+  partner        Partner   @relation(fields: [partnerId], references: [id])
+  customerName   String
+  customerPhone  String
+  totalAmount    Float
+  items          Json
+  createdAt      DateTime  @default(now())
+}
+
+model Venue {
+  id          String   @id @default(cuid())
+  partnerId   String
+  partner     Partner  @relation(fields: [partnerId], references: [id])
+  name        String
+  description String
+  city        String
+  price       Float
+  images      String[]
+  status      String   @default("Active")
+  createdAt   DateTime @default(now())
+  bookings    Booking[]
+
+  @@index([city])
+  @@index([status])
+}
+
+// ==========================================
+// LOKSAFARI TOURISM & EVENTS & OFFERS
+// ==========================================
+
+model LokSafariPackage {
+  id          String   @id @default(cuid())
+  title       String
+  location    String
+  duration    String
+  price       Float
+  description String
+  imageUrl    String
+  status      String   @default("Draft")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model UpcomingEvent {
+  id          String   @id @default(cuid())
+  title       String
+  category    String
+  date        DateTime
+  location    String
+  description String
+  imageUrl    String
+  price       Float?
+  
+  // Ticketing Features
+  totalTickets Int      @default(0)
+  ticketsSold  Int      @default(0)
+  features     String[] // e.g. ["Live DJ", "Food Included", "AC Hall"]
+  ticketTiers  Json?    // e.g. { single: 499, couple: 899, family4: 1599, family6: 2299, group5: 1999, child: 249 }
+  
+  status      String   @default("Active")
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  bookings    EventBooking[]
+
+  @@index([location])
+  @@index([date])
+  @@index([category])
+}
+
+model EventBooking {
+  id                String   @id @default(cuid())
+  userId            String
+  user              User     @relation(fields: [userId], references: [id])
+  eventId           String
+  event             UpcomingEvent @relation(fields: [eventId], references: [id])
+  ticketsCount      Int
+  tierType          String?  // e.g. "SINGLE", "COUPLE", "FAMILY_4", "FAMILY_6", "GROUP_5", "CHILD"
+  tierName          String?  // e.g. "Single Pass", "Couple Pass", etc.
+  totalAmount       Float
+  status            String   @default("CONFIRMED")
+  paymentId         String?
+  ticketUrl         String?
+  referralCodeUsed  String?
+  createdAt         DateTime @default(now())
+}
+
+model Offer {
+  id              String    @id @default(cuid())
+  title           String
+  code            String    @unique
+  discountPercent Float
+  description     String?
+  validFrom       DateTime
+  validTo         DateTime
+  status          String    @default("Active")
+  createdAt       DateTime  @default(now())
+}
+
+// ==========================================
+// CMS, SEO, & REDIRECTS
+// ==========================================
+
+model BlogPost {
+  id              String    @id @default(cuid())
+  title           String
+  slug            String    @unique
+  content         String
+  featuredImage   String?
+  author          String    @default("happylokam")
+  metaTitle       String?
+  metaDescription String?
+  metaKeywords    String?
+  status          String    @default("Draft")
+  publishedAt     DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+}
+
+model SeoMetadata {
+  id             String   @id @default(cuid())
+  url            String   @unique
+  title          String
+  description    String?
+  canonical      String?
+  robots         String?  // e.g., "index, follow"
+  ogImage        String?
+  targetId       String?  // Optional relation ID if linked to a specific entity
+  targetType     String?  // e.g., "BLOG", "VENUE"
+  createdAt      DateTime @default(now())
+}
+
+model Redirect {
+  id             String   @id @default(cuid())
+  sourceUrl      String   @unique
+  destinationUrl String
+  type           Int      @default(301) // 301, 302
+  createdAt      DateTime @default(now())
+}
+
+// ==========================================
+// ADVANCED NOTIFICATIONS & AUDIT LOGS
+// ==========================================
+
+model DeviceToken {
+  id           String   @id @default(cuid())
+  userId       String?
+  user         User?    @relation(fields: [userId], references: [id])
+  partnerId    String?
+  partner      Partner? @relation(fields: [partnerId], references: [id])
+  platform     String   // ANDROID, IOS, WEB
+  pushToken    String   @unique
+  appVersion   String?
+  deviceStatus String   @default("ACTIVE")
+  lastActive   DateTime @default(now())
+  createdAt    DateTime @default(now())
+}
+
+model NotificationTemplate {
+  id        String   @id @default(cuid())
+  event     String   @unique // e.g., "BookingCreated"
+  title     String
+  message   String
+  variables String[] // e.g., ["customerName", "bookingId"]
+  channel   String   @default("PUSH") // PUSH, EMAIL, SMS, IN_APP
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+  deliveries NotificationDelivery[]
+}
+
+model NotificationDelivery {
+  id          String   @id @default(cuid())
+  templateId  String
+  template    NotificationTemplate @relation(fields: [templateId], references: [id])
+  channel     String
+  recipientId String   // User ID or Partner ID
+  status      String   @default("PENDING") // PENDING, SENT, FAILED
+  error       String?
+  createdAt   DateTime @default(now())
+}
+
+model Notification {
+  id          String   @id @default(cuid())
+  title       String
+  message     String
+  targetRole  String   @default("ALL")
+  type        String   @default("IN_APP")
+  sentAt      DateTime @default(now())
+  createdAt   DateTime @default(now())
+
+  userNotifications    UserNotification[]
+  partnerNotifications PartnerNotification[]
+}
+
+model UserNotification {
+  id             String       @id @default(cuid())
+  userId         String
+  user           User         @relation(fields: [userId], references: [id])
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id])
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  @@unique([userId, notificationId])
+}
+
+model PartnerNotification {
+  id             String       @id @default(cuid())
+  partnerId      String
+  partner        Partner      @relation(fields: [partnerId], references: [id])
+  notificationId String
+  notification   Notification @relation(fields: [notificationId], references: [id])
+  isRead         Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+  @@unique([partnerId, notificationId])
+}
+
+model Announcement {
+  id             String    @id @default(cuid())
+  title          String
+  message        String
+  targetAudience String    @default("ALL")
+  priority       String    @default("MEDIUM")
+  isActive       Boolean   @default(true)
+  expiresAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  adminId   String
+  admin     Admin    @relation(fields: [adminId], references: [id])
+  action    String   // e.g., "REFUND_INITIATED", "PARTNER_SUSPENDED"
+  resource  String   // e.g., "Payment_123", "Partner_456"
+  metadata  Json?
+  ip        String?
+  timestamp DateTime @default(now())
+}
+
+// ==========================================
+// HOMEPAGE HERO & BANNER CMS
+// ==========================================
+
+model HeroSlide {
+  id        String   @id @default(cuid())
+  image     String
+  badge     String
+  title1    String
+  title2    String
+  desc      String
+  ctaText   String   @default("Search Packages")
+  ctaLink   String   @default("/search")
+  gradient  String   @default("from-rose-500 to-rose-700")
+  order     Int      @default(0)
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ==========================================
+// DYNAMIC CMS SECTIONS & ITEM BOOKINGS
+// ==========================================
+
+model CustomSection {
+  id          String              @id @default(cuid())
+  title       String              // Section name
+  subtitle    String?
+  tag         String?
+  order       Int                 @default(0)
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  items       CustomSectionItem[]
+}
+
+model CustomCategory {
+  id          String              @id @default(cuid())
+  name        String              // Category name
+  image       String              // Category image
+  tag         String?
+  order       Int                 @default(0)
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  items       CustomSectionItem[]
+}
+
+model CustomSectionItem {
+  id             String                 @id @default(cuid())
+  sectionId      String?
+  section        CustomSection?         @relation(fields: [sectionId], references: [id], onDelete: Cascade)
+  categoryId     String?
+  category       CustomCategory?        @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  title          String
+  subtitle       String?
+  badge          String?                // Badge: Trending, Popular, 20% OFF, etc.
+  location       String?
+  itemType       String                 @default("BOOKING") // TICKET or BOOKING
+  price          Float
+  priceUnit      String?                @default("per booking")
+  image          String
+  description    String?
+  features       String[]               @default([])
+  availableDates String[]               @default([])
+  availableTimes String[]               @default([])
+  totalSlots     Int                    @default(100)
+  bookedSlots    Int                    @default(0)
+  rating         Float                  @default(4.9)
+  reviews        Int                    @default(0)
+  tags           String[]               @default([])
+  isActive       Boolean                @default(true)
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  bookings       CustomSectionBooking[]
+
+  @@index([sectionId])
+  @@index([categoryId])
+}
+
+model CustomSectionBooking {
+  id            String             @id @default(cuid())
+  itemId        String
+  item          CustomSectionItem  @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  userId        String?
+  userName      String
+  userPhone     String
+  userEmail     String?
+  bookingDate   String             // Selected available date
+  bookingTime   String?            // Selected time slot
+  quantity      Int                @default(1)
+  itemType      String             @default("BOOKING")
+  totalAmount   Float
+  status        String             @default("CONFIRMED") // CONFIRMED, COMPLETED, CANCELLED
+  ticketCode    String             @unique // e.g. "HL-TCK-92813"
+  paymentStatus String             @default("PAID")
+  notes         String?
+  createdAt     DateTime           @default(now())
+
+  @@index([itemId])
+  @@index([userId])
+}
+
+// ==========================================
+// CAREER PORTAL & APPLICATIONS
+// ==========================================
+
+model CareerApplication {
+  id           String   @id @default(cuid())
+  fullName     String
+  email        String
+  phone        String
+  role         String
+  experience   String
+  portfolioUrl String?
+  resumeUrl    String?
+  coverNote    String
+  status       String   @default("PENDING") // PENDING, SHORTLISTED, INTERVIEWING, REJECTED, HIRED
+  adminNotes   String?
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@index([status])
+  @@index([role])
+}
+
+// ==========================================
+// ADMIN LIVE PLATFORM ACTIVITY NOTIFICATIONS
+// ==========================================
+
+model AdminActivityNotification {
+  id         String   @id @default(cuid())
+  type       String   // BOOKING_CREATED, PAYMENT_RECEIVED, CAREER_APPLICATION, PARTNER_REGISTERED, USER_SIGNUP, CHECKIN_COMPLETED
+  title      String
+  message    String
+  metadata   Json?
+  severity   String   @default("INFO") // INFO, SUCCESS, WARNING, URGENT
+  isRead     Boolean  @default(false)
+  createdAt  DateTime @default(now())
+
+  @@index([isRead])
+  @@index([type])
+}
+
+// ==========================================
+// DYNAMIC CUSTOMER & PARTNER SUPPORT TICKETS
+// ==========================================
+
+model SupportTicket {
+  id           String    @id @default(cuid())
+  ticketNumber String    @unique
+  userId       String?
+  userName     String
+  userEmail    String?
+  userPhone    String
+  category     String    @default("GENERAL") // BOOKING_PASS, PAYMENT_RAZORPAY, CATERING_DECOR, VENUE_ACCESS, GENERAL
+  subject      String
+  message      String
+  status       String    @default("OPEN") // OPEN, IN_PROGRESS, RESOLVED, CLOSED
+  priority     String    @default("MEDIUM") // LOW, MEDIUM, HIGH, URGENT
+  adminReply   String?
+  resolvedAt   DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@index([status])
+  @@index([priority])
+  @@index([userPhone])
+}
+
+
+

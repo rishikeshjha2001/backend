@@ -1,0 +1,23 @@
+services:
+  postgres:
+    image: postgres:15
+    container_name: happylokam-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: happylokam
+    ports:
+      - "5432:5432"
+    volumes:
+      - happylokam-db-data:/var/lib/postgresql/data
+    restart: unless-stopped
+
+  redis:
+    image: redis:alpine
+    container_name: happylokam-redis
+    ports:
+      - "6379:6379"
+    restart: unless-stopped
+
+volumes:
+  happylokam-db-data:
