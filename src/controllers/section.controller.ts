@@ -460,6 +460,8 @@ export const createSectionItem = async (req: Request, res: Response) => {
 
     const calculatedSlots = Number(capacity) || Number(totalSlots) || 100;
 
+    const isTicketItem = String(itemType).toUpperCase() === 'TICKET';
+
     const item = await (prisma as any).customSectionItem.create({
       data: {
         sectionId: sectionId || undefined,
@@ -468,10 +470,10 @@ export const createSectionItem = async (req: Request, res: Response) => {
         subtitle: subtitle?.trim() || finalBadge || null,
         badge: finalBadge,
         location: location?.trim() || 'Pan-India',
-        itemType: String(itemType).toUpperCase() === 'TICKET' ? 'TICKET' : 'BOOKING',
+        itemType: isTicketItem ? 'TICKET' : 'BOOKING',
         price: numPrice,
         priceUnit: priceUnit?.trim() || 'per booking',
-        availableDates: dateArr,
+        availableDates: isTicketItem ? dateArr : [],
         availableTimes: timeArr,
         features: featArr,
         totalSlots: calculatedSlots,
@@ -540,11 +542,24 @@ export const updateSectionItem = async (req: Request, res: Response) => {
     if (features !== undefined) {
       updateData.features = Array.isArray(features) ? features : String(features).split(',').map(s => s.trim()).filter(Boolean);
     }
+    let isTicketType = updateData.itemType === 'TICKET';
+    if (updateData.itemType === undefined && availableDates !== undefined) {
+      const existing = await (prisma as any).customSectionItem.findUnique({
+        where: { id: itemId },
+        select: { itemType: true },
+      });
+      isTicketType = existing?.itemType === 'TICKET';
+    }
+
     if (availableTimes !== undefined) {
       updateData.availableTimes = Array.isArray(availableTimes) ? availableTimes : String(availableTimes).split(',').map(s => s.trim()).filter(Boolean);
     }
     if (availableDates !== undefined) {
-      updateData.availableDates = Array.isArray(availableDates) ? availableDates : String(availableDates).split(',').map(s => s.trim()).filter(Boolean);
+      updateData.availableDates = isTicketType
+        ? (Array.isArray(availableDates) ? availableDates : String(availableDates).split(',').map(s => s.trim()).filter(Boolean))
+        : [];
+    } else if (updateData.itemType && !isTicketType) {
+      updateData.availableDates = [];
     }
     if (tags !== undefined) {
       updateData.tags = Array.isArray(tags) ? tags : [badge || 'Featured'];
@@ -622,13 +637,13 @@ export const bookSectionItem = async (req: Request, res: Response) => {
 
     const cleanDate = String(bookingDate).trim();
 
-    // Check if item has specific available dates configured and ensure requested date is permitted
-    if (Array.isArray(item.availableDates) && item.availableDates.length > 0) {
+    // Check if item is a ticket with specific dates configured; regular bookings have all dates available
+    if (item.itemType === 'TICKET' && Array.isArray(item.availableDates) && item.availableDates.length > 0) {
       const isDateAvailable = item.availableDates.some((d: string) => String(d).trim() === cleanDate);
       if (!isDateAvailable) {
         return res.status(400).json({
           success: false,
-          error: `The date ${cleanDate} is not available for this package. Available dates: ${item.availableDates.join(', ')}`,
+          error: `The date ${cleanDate} is not available for this ticket pass. Available dates: ${item.availableDates.join(', ')}`,
         });
       }
     }

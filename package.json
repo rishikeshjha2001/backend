@@ -4,6 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
+    "build": "tsc",
     "start": "tsc && node dist/server.js",
     "dev": "nodemon src/server.ts",
     "db:push": "prisma db push",
