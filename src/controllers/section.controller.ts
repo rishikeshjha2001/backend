@@ -372,22 +372,97 @@ export const deleteCategory = async (req: Request, res: Response) => {
 export const getSectionItemById = async (req: Request, res: Response) => {
   try {
     const { itemId } = req.params;
+    const targetItemId = String(itemId);
     const item = await (prisma as any).customSectionItem.findUnique({
-      where: { id: itemId },
+      where: { id: targetItemId },
       include: {
         section: { select: { id: true, title: true, subtitle: true, tag: true } },
         category: { select: { id: true, name: true, image: true } },
       },
     });
 
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, error: 'Item not found or unavailable' });
+    if (item && item.isActive) {
+      return res.status(200).json({
+        success: true,
+        data: formatSectionItem(item),
+      });
     }
 
-    return res.status(200).json({
-      success: true,
-      data: formatSectionItem(item),
+    // Fallback 1: Check PartnerService
+    const partnerService: any = await (prisma as any).partnerService.findUnique({
+      where: { id: targetItemId },
+      include: { partner: true },
     });
+
+    if (partnerService && partnerService.isActive) {
+      const formatted = {
+        id: partnerService.id,
+        title: partnerService.name,
+        subtitle: partnerService.partner?.businessName || partnerService.subCategory || partnerService.category,
+        badge: partnerService.category,
+        cornerTag: partnerService.category,
+        tag: partnerService.category,
+        price: partnerService.pricing,
+        priceUnit: partnerService.pricingUnit === 'PER_PLATE' ? 'per plate' : (partnerService.pricingUnit === 'PER_DAY' ? 'per day' : 'per booking'),
+        itemType: 'BOOKING',
+        location: partnerService.location || partnerService.city || 'Bihar, India',
+        image: (partnerService.images && partnerService.images[0]) || '',
+        images: partnerService.images || [],
+        features: partnerService.features && partnerService.features.length > 0 ? partnerService.features : ['100% Verified Quality', 'Instant Digital Pass', 'Dedicated Coordination'],
+        availableTimes: ['10:00 AM - 02:00 PM', '02:30 PM - 06:30 PM', '07:00 PM - 11:30 PM'],
+        availableDates: [],
+        capacity: partnerService.capacity || 100,
+        tags: [partnerService.category, partnerService.city || 'Verified'],
+        description: partnerService.description,
+        rating: partnerService.rating || 4.9,
+        reviews: partnerService.totalBookings || 12,
+        partnerId: partnerService.partnerId,
+        isActive: true,
+      };
+      return res.status(200).json({
+        success: true,
+        data: formatted,
+      });
+    }
+
+    // Fallback 2: Check Venue
+    const venue: any = await (prisma as any).venue.findUnique({
+      where: { id: targetItemId },
+      include: { partner: true },
+    });
+
+    if (venue && venue.status !== 'INACTIVE') {
+      const formatted = {
+        id: venue.id,
+        title: venue.name,
+        subtitle: venue.partner?.businessName || venue.city,
+        badge: 'Venue',
+        cornerTag: 'Venue',
+        tag: 'Venue',
+        price: venue.price,
+        priceUnit: 'per day',
+        itemType: 'BOOKING',
+        location: venue.city || 'Bihar, India',
+        image: (venue.images && venue.images[0]) || '',
+        images: venue.images || [],
+        features: ['Air Conditioned', 'Power Backup', 'Parking Space', 'Dedicated Manager'],
+        availableTimes: ['Full Day (09:00 AM - 11:00 PM)'],
+        availableDates: [],
+        capacity: 250,
+        tags: ['Venue', venue.city || 'Verified'],
+        description: venue.description,
+        rating: 4.9,
+        reviews: 24,
+        partnerId: venue.partnerId,
+        isActive: true,
+      };
+      return res.status(200).json({
+        success: true,
+        data: formatted,
+      });
+    }
+
+    return res.status(404).json({ success: false, error: 'Item not found or unavailable' });
   } catch (error: any) {
     console.error('getSectionItemById error:', error);
     return res.status(500).json({ success: false, error: error.message });
@@ -622,49 +697,6 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       notes,
     } = req.body;
 
-    const item = await (prisma as any).customSectionItem.findUnique({
-      where: { id: itemId },
-      include: { section: true, category: true },
-    });
-
-    if (!item || !item.isActive) {
-      return res.status(404).json({ success: false, error: 'Item not found or currently unavailable' });
-    }
-
-    if (!bookingDate) {
-      return res.status(400).json({ success: false, error: 'Please select a booking date' });
-    }
-
-    const cleanDate = String(bookingDate).trim();
-
-    // Check if item is a ticket with specific dates configured; regular bookings have all dates available
-    if (item.itemType === 'TICKET' && Array.isArray(item.availableDates) && item.availableDates.length > 0) {
-      const isDateAvailable = item.availableDates.some((d: string) => String(d).trim() === cleanDate);
-      if (!isDateAvailable) {
-        return res.status(400).json({
-          success: false,
-          error: `The date ${cleanDate} is not available for this ticket pass. Available dates: ${item.availableDates.join(', ')}`,
-        });
-      }
-    }
-
-    // For non-ticket reservation bookings, check if date is already booked
-    if (item.itemType !== 'TICKET') {
-      const existingDateBooking = await (prisma as any).customSectionBooking.findFirst({
-        where: {
-          itemId,
-          bookingDate: cleanDate,
-          status: { in: ['CONFIRMED', 'PENDING'] },
-        },
-      });
-      if (existingDateBooking) {
-        return res.status(400).json({
-          success: false,
-          error: `This service is already booked or reserved on ${cleanDate}. Please select another available date.`,
-        });
-      }
-    }
-
     if (!userName || !userName.trim()) {
       return res.status(400).json({ success: false, error: 'Name is required' });
     }
@@ -673,108 +705,237 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'Contact phone number is required' });
     }
 
-    const numQty = Math.max(1, parseInt(quantity) || 1);
-
-    if (item.totalSlots && item.bookedSlots + numQty > item.totalSlots) {
-      return res.status(400).json({
-        success: false,
-        error: `Only ${Math.max(0, item.totalSlots - item.bookedSlots)} spots/tickets remaining for this item`,
-      });
+    if (!bookingDate) {
+      return res.status(400).json({ success: false, error: 'Please select a booking date' });
     }
 
-    const userId = (req as any).user?.id || null;
-    const baseTotal = item.price * numQty;
+    const cleanDate = String(bookingDate).trim();
+    const numQty = Math.max(1, parseInt(quantity) || 1);
+    const targetItemId = String(itemId);
 
-    // Handle authenticated user wallet deduction if requested
-    const requestedWalletDeduct = Number(req.body.walletDiscount || req.body.walletDeducted || (req.body.useWallet ? 500 : 0));
-    let actualWalletDeduction = 0;
-    if (requestedWalletDeduct > 0 && userId) {
-      const userProfile = await prisma.user.findUnique({
-        where: { id: userId },
-        select: { walletBalance: true },
-      });
-      if (userProfile && userProfile.walletBalance > 0) {
-        actualWalletDeduction = Math.min(requestedWalletDeduct, userProfile.walletBalance, baseTotal);
-        if (actualWalletDeduction > 0) {
-          await prisma.user.update({
-            where: { id: userId },
-            data: { walletBalance: { decrement: actualWalletDeduction } },
+    // 1. Try CustomSectionItem (Admin configured section item)
+    const item = await (prisma as any).customSectionItem.findUnique({
+      where: { id: targetItemId },
+      include: { section: true, category: true },
+    });
+
+    if (item && item.isActive) {
+      // Check if item is a ticket with specific dates configured; regular bookings have all dates available
+      if (item.itemType === 'TICKET' && Array.isArray(item.availableDates) && item.availableDates.length > 0) {
+        const isDateAvailable = item.availableDates.some((d: string) => String(d).trim() === cleanDate);
+        if (!isDateAvailable) {
+          return res.status(400).json({
+            success: false,
+            error: `The date ${cleanDate} is not available for this ticket pass. Available dates: ${item.availableDates.join(', ')}`,
           });
         }
       }
-    }
 
-    const totalAmount = Math.max(0, baseTotal - actualWalletDeduction);
-    const prefix = item.itemType === 'TICKET' ? 'HL-TCK' : 'HL-BKG';
-    const randPart = Math.floor(100000 + Math.random() * 900000);
-    const ticketCode = `${prefix}-${Date.now().toString(36).toUpperCase()}-${randPart}`;
+      // Check slot limits
+      if (item.totalSlots && item.bookedSlots + numQty > item.totalSlots) {
+        return res.status(400).json({
+          success: false,
+          error: `Only ${Math.max(0, item.totalSlots - item.bookedSlots)} spots/tickets remaining for this item`,
+        });
+      }
 
-    // Strictly require gateway payment verification for paid items: only free items confirm immediately
-    const paymentConfirmed = totalAmount === 0;
+      const userId = (req as any).user?.id || null;
+      const baseTotal = item.price * numQty;
+      // All pricing strictly as configured by Admin - no hardcoded/fabricated discounts
+      const totalAmount = baseTotal;
 
-    const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
-    const paymentStatus = paymentConfirmed ? 'PAID' : 'PENDING';
+      const prefix = item.itemType === 'TICKET' ? 'HL-TCK' : 'HL-BKG';
+      const randPart = Math.floor(100000 + Math.random() * 900000);
+      const ticketCode = `${prefix}-${Date.now().toString(36).toUpperCase()}-${randPart}`;
 
-    const booking = await (prisma as any).customSectionBooking.create({
-      data: {
-        itemId,
-        userId,
-        userName: userName.trim(),
-        userPhone: userPhone.trim(),
-        userEmail: userEmail?.trim() || null,
-        bookingDate: String(bookingDate).trim(),
-        bookingTime: bookingTime ? String(bookingTime).trim() : null,
-        quantity: numQty,
-        itemType: item.itemType,
-        totalAmount,
-        status: bookingStatus,
-        ticketCode,
-        paymentStatus,
-        notes: notes?.trim() || null,
-      },
-      include: {
-        item: {
-          select: {
-            title: true,
-            location: true,
-            image: true,
-            price: true,
-            itemType: true,
-            badge: true,
+      const paymentConfirmed = totalAmount === 0;
+      const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
+      const paymentStatus = paymentConfirmed ? 'PAID' : 'PENDING';
+
+      const booking = await (prisma as any).customSectionBooking.create({
+        data: {
+          itemId,
+          userId,
+          userName: userName.trim(),
+          userPhone: userPhone.trim(),
+          userEmail: userEmail?.trim() || null,
+          bookingDate: cleanDate,
+          bookingTime: bookingTime ? String(bookingTime).trim() : null,
+          quantity: numQty,
+          itemType: item.itemType,
+          totalAmount,
+          status: bookingStatus,
+          ticketCode,
+          paymentStatus,
+          notes: notes?.trim() || null,
+        },
+        include: {
+          item: {
+            select: {
+              title: true,
+              location: true,
+              image: true,
+              price: true,
+              itemType: true,
+              badge: true,
+            },
           },
         },
-      },
-    });
+      });
 
-    // Increment booked slots only when payment is confirmed or item is free
-    if (paymentConfirmed) {
-      await (prisma as any).customSectionItem.update({
-        where: { id: itemId },
-        data: { bookedSlots: { increment: numQty } },
+      if (paymentConfirmed) {
+        await (prisma as any).customSectionItem.update({
+          where: { id: itemId },
+          data: { bookedSlots: { increment: numQty } },
+        });
+      }
+
+      // Notify User only when confirmed
+      if (userId && paymentConfirmed) {
+        prisma.notification.create({
+          data: {
+            title: `🎟️ ${item.itemType === 'TICKET' ? 'Ticket Pass' : 'Celebration Booking'} Confirmed!`,
+            message: `Your booking for "${item.title}" on ${cleanDate} is confirmed. Pass Code: ${ticketCode}`,
+            targetRole: 'USER',
+            type: 'BOOKING',
+          },
+        }).then(async (notif: any) => {
+          await prisma.userNotification.create({
+            data: { userId, notificationId: notif.id, isRead: false },
+          }).catch(() => {});
+        }).catch(() => {});
+      }
+
+      // Notify Admin
+      prisma.notification.create({
+        data: {
+          title: `📢 New ${item.itemType === 'TICKET' ? 'Ticket' : 'Booking'} - ${item.title}`,
+          message: `${userName} (${userPhone}) booked ${numQty}x "${item.title}" for ${cleanDate}. Pass Code: ${ticketCode}. Total: ₹${totalAmount}`,
+          targetRole: 'ADMIN',
+          type: 'BOOKING',
+        },
+      }).catch(() => {});
+
+      return res.status(201).json({
+        success: true,
+        message: `${item.itemType === 'TICKET' ? 'Ticket pass' : 'Booking'} created successfully!`,
+        data: booking,
       });
     }
 
-    // Notify User only when confirmed
-    if (userId && paymentConfirmed) {
-      prisma.notification.create({
-        data: {
-          title: `🎟️ ${item.itemType === 'TICKET' ? 'Ticket Pass' : 'Celebration Booking'} Confirmed!`,
-          message: `Your booking for "${item.title}" on ${bookingDate} is confirmed. Pass Code: ${ticketCode}`,
-          targetRole: 'USER',
-          type: 'BOOKING',
+    // 2. Try PartnerService or Venue (Partner uploaded services)
+    const [partnerService, venue]: [any, any] = await Promise.all([
+      (prisma as any).partnerService.findUnique({ where: { id: targetItemId }, include: { partner: true } }),
+      (prisma as any).venue.findUnique({ where: { id: targetItemId }, include: { partner: true } }),
+    ]);
+
+    const isPartnerActive = partnerService ? Boolean(partnerService.isActive) : false;
+    const isVenueActive = venue ? venue.status !== 'INACTIVE' : false;
+
+    if (!partnerService && !venue) {
+      return res.status(404).json({ success: false, error: 'Item not found or currently unavailable' });
+    }
+    if (partnerService && !isPartnerActive) {
+      return res.status(404).json({ success: false, error: 'Partner service is currently unavailable' });
+    }
+    if (venue && !isVenueActive) {
+      return res.status(404).json({ success: false, error: 'Venue is currently unavailable' });
+    }
+
+    const partnerEntity = partnerService || venue;
+    const isPartnerService = Boolean(partnerService);
+    const partnerId = partnerEntity.partnerId;
+    const unitPrice = isPartnerService ? partnerService.pricing : venue.price;
+    const baseTotal = unitPrice * numQty;
+    const totalAmount = baseTotal; // Admin/Partner controlled price, no fabricated discounts
+
+    // Find or create user record so foreign key userId constraint is satisfied
+    let targetUserId = (req as any).user?.id || null;
+    if (!targetUserId) {
+      let existingUser = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { phone: userPhone.trim() },
+            ...(userEmail ? [{ email: userEmail.trim() }] : []),
+          ],
         },
-      }).then(async (notif: any) => {
-        await prisma.userNotification.create({
-          data: { userId, notificationId: notif.id, isRead: false },
-        }).catch(() => {});
-      }).catch(() => {});
+      });
+      if (!existingUser) {
+        const cleanPhone = userPhone.trim().replace(/\D/g, '');
+        existingUser = await prisma.user.create({
+          data: {
+            name: userName.trim(),
+            email: userEmail?.trim() || `customer_${cleanPhone || Date.now()}@happylokam.com`,
+            phone: userPhone.trim(),
+            passwordHash: 'GUEST_USER_SECURE',
+            role: 'USER',
+          },
+        });
+      }
+      targetUserId = existingUser.id;
+    }
+
+    const randPart = Math.floor(100000 + Math.random() * 900000);
+    const ticketCode = `HL-BKG-${Date.now().toString(36).toUpperCase()}-${randPart}`;
+    const paymentConfirmed = totalAmount === 0;
+    const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
+    const paymentStatus = paymentConfirmed ? 'PAID' : 'PENDING';
+
+    let bookingDateObj: Date;
+    try {
+      bookingDateObj = new Date(cleanDate);
+      if (isNaN(bookingDateObj.getTime())) {
+        bookingDateObj = new Date();
+      }
+    } catch {
+      bookingDateObj = new Date();
+    }
+
+    const booking = await prisma.booking.create({
+      data: {
+        userId: targetUserId,
+        partnerId: partnerId,
+        venueId: isPartnerService ? null : venue!.id,
+        date: bookingDateObj,
+        baseAmount: baseTotal,
+        totalAmount: totalAmount,
+        ticketId: ticketCode,
+        referralCodeUsed: isPartnerService ? partnerService!.name : venue!.name,
+        status: bookingStatus,
+        paymentStatus: paymentStatus,
+      },
+      include: {
+        venue: { select: { name: true, city: true, price: true } },
+        user: { select: { name: true, email: true, phone: true } },
+      },
+    });
+
+    // Notify Partner immediately so Partner App updates in real time
+    try {
+      const entityName = isPartnerService ? partnerService!.name : venue!.name;
+      const notif = await prisma.notification.create({
+        data: {
+          title: `🎉 New Booking: ${entityName}`,
+          message: `Booking received from ${userName.trim()} (${userPhone.trim()}) for ${cleanDate}. Total: ₹${totalAmount}`,
+          targetRole: 'PARTNER',
+          type: 'IN_APP',
+        },
+      });
+      await prisma.partnerNotification.create({
+        data: {
+          partnerId: partnerId,
+          notificationId: notif.id,
+        },
+      });
+    } catch (notifErr) {
+      console.warn('Partner notification error (non-fatal):', notifErr);
     }
 
     // Notify Admin
     prisma.notification.create({
       data: {
-        title: `📢 New ${item.itemType === 'TICKET' ? 'Ticket' : 'Booking'} - ${item.title}`,
-        message: `${userName} (${userPhone}) booked ${numQty}x "${item.title}" for ${bookingDate}. Pass Code: ${ticketCode}. Total: ₹${totalAmount}`,
+        title: `📢 Partner Service Booked: ${isPartnerService ? partnerService!.name : venue!.name}`,
+        message: `${userName} (${userPhone}) booked ${numQty}x for ${cleanDate}. Pass Code: ${ticketCode}. Total: ₹${totalAmount}`,
         targetRole: 'ADMIN',
         type: 'BOOKING',
       },
@@ -782,8 +943,24 @@ export const bookSectionItem = async (req: Request, res: Response) => {
 
     return res.status(201).json({
       success: true,
-      message: `${item.itemType === 'TICKET' ? 'Ticket pass' : 'Booking'} confirmed successfully!`,
-      data: booking,
+      message: paymentConfirmed ? 'Booking confirmed successfully!' : 'Booking created. Proceeding to payment.',
+      data: {
+        id: booking.id,
+        ticketCode: ticketCode,
+        status: bookingStatus,
+        paymentStatus: paymentStatus,
+        totalAmount: totalAmount,
+        bookingDate: cleanDate,
+        bookingTime: bookingTime || null,
+        item: {
+          title: isPartnerService ? partnerService!.name : venue!.name,
+          location: isPartnerService ? partnerService!.city : venue!.city,
+          image: isPartnerService ? ((partnerService!.images && partnerService!.images[0]) || '') : ((venue!.images && venue!.images[0]) || ''),
+          price: unitPrice,
+          itemType: 'BOOKING',
+          badge: isPartnerService ? partnerService!.category : 'Venue',
+        },
+      },
     });
   } catch (error: any) {
     console.error('bookSectionItem error:', error);

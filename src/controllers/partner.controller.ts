@@ -989,8 +989,8 @@ export const getPartnerBookings = async (req: Request, res: Response) => {
       customerName: b.user?.name || 'Customer',
       customerEmail: b.user?.email || 'N/A',
       customerPhone: b.user?.phone || 'N/A',
-      listing: { name: b.venue?.name || 'Celebration Service' },
-      serviceName: b.venue?.name || 'Celebration Service',
+      listing: { name: b.venue?.name || b.referralCodeUsed || 'Celebration Service' },
+      serviceName: b.venue?.name || b.referralCodeUsed || 'Celebration Service',
       venue: b.venue,
       user: b.user,
       payments: b.payments,
@@ -1061,7 +1061,14 @@ export const getPartnerBookingDetail = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Booking not found.' });
     }
 
-    return res.json({ success: true, data: booking });
+    return res.json({
+      success: true,
+      data: {
+        ...booking,
+        serviceName: booking.venue?.name || (booking as any).referralCodeUsed || 'Celebration Service',
+        listing: { name: booking.venue?.name || (booking as any).referralCodeUsed || 'Celebration Service' },
+      },
+    });
   } catch (error: any) {
     console.error('Get booking detail error:', error);
     return res.status(500).json({ success: false, error: 'Failed to fetch booking.' });

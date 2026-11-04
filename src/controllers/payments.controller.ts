@@ -44,12 +44,19 @@ export const createOrder = async (req: Request, res: Response) => {
       targetId = eventBookingId;
     } else if (sectionBookingId) {
       const sb = await (prisma as any).customSectionBooking.findUnique({ where: { id: sectionBookingId } });
-      if (!sb) {
-        return res.status(404).json({ success: false, error: 'Target section booking not found.' });
+      if (sb) {
+        targetAmount = sb.totalAmount;
+        targetPurpose = 'SECTION';
+        targetId = sectionBookingId;
+      } else {
+        const mb = await prisma.booking.findUnique({ where: { id: sectionBookingId } });
+        if (!mb) {
+          return res.status(404).json({ success: false, error: 'Target section booking not found.' });
+        }
+        targetAmount = mb.totalAmount;
+        targetPurpose = 'SECTION';
+        targetId = sectionBookingId;
       }
-      targetAmount = sb.totalAmount;
-      targetPurpose = 'SECTION';
-      targetId = sectionBookingId;
     } else if (purpose === 'WALLET_TOPUP' || req.body.isWalletTopUp) {
       return res.status(403).json({
         success: false,
@@ -398,14 +405,61 @@ export const verifyPayment = async (req: Request, res: Response) => {
       const sectionBooking = await (prisma as any).customSectionBooking.findUnique({
         where: { id: targetSectionBookingId },
       });
-      if (!sectionBooking) {
-        return res.status(404).json({ success: false, error: 'Associated section booking not found.' });
+      if (sectionBooking) {
+        if (!isEqualAmount(verifiedPaidAmount, sectionBooking.totalAmount, 1.0)) {
+          return res.status(400).json({
+            success: false,
+            error: `Payment amount mismatch: Paid ₹${verifiedPaidAmount}, but service requires ₹${sectionBooking.totalAmount}.`,
+          });
+        }
+
+        await prisma.$transaction([
+          prisma.payment.upsert({
+            where: { razorpayPaymentId: razorpay_payment_id },
+            create: {
+              amount: verifiedPaidAmount,
+              currency: 'INR',
+              status: 'CAPTURED',
+              razorpayOrderId: razorpay_order_id,
+              razorpayPaymentId: razorpay_payment_id,
+              razorpaySignature: razorpay_signature || null,
+              capturedAt: new Date(),
+            },
+            update: {
+              status: 'CAPTURED',
+              amount: verifiedPaidAmount,
+              capturedAt: new Date(),
+            },
+          }),
+          (prisma as any).customSectionBooking.update({
+            where: { id: targetSectionBookingId },
+            data: {
+              status: 'CONFIRMED',
+              paymentStatus: 'PAID',
+            },
+          }),
+        ]);
+
+        return res.status(200).json({
+          success: true,
+          message: 'Section reservation payment verified and confirmed.',
+        });
       }
 
-      if (!isEqualAmount(verifiedPaidAmount, sectionBooking.totalAmount, 1.0)) {
+      // Fallback: Check prisma.booking (for partner services / venues)
+      const partnerBooking = await prisma.booking.findUnique({
+        where: { id: targetSectionBookingId },
+        include: { partner: true },
+      });
+
+      if (!partnerBooking) {
+        return res.status(404).json({ success: false, error: 'Associated section or partner booking not found.' });
+      }
+
+      if (!isEqualAmount(verifiedPaidAmount, partnerBooking.totalAmount, 1.0)) {
         return res.status(400).json({
           success: false,
-          error: `Payment amount mismatch: Paid ₹${verifiedPaidAmount}, but service requires ₹${sectionBooking.totalAmount}.`,
+          error: `Payment amount mismatch: Paid ₹${verifiedPaidAmount}, but service requires ₹${partnerBooking.totalAmount}.`,
         });
       }
 
@@ -416,6 +470,7 @@ export const verifyPayment = async (req: Request, res: Response) => {
             amount: verifiedPaidAmount,
             currency: 'INR',
             status: 'CAPTURED',
+            bookingId: partnerBooking.id,
             razorpayOrderId: razorpay_order_id,
             razorpayPaymentId: razorpay_payment_id,
             razorpaySignature: razorpay_signature || null,
@@ -424,21 +479,44 @@ export const verifyPayment = async (req: Request, res: Response) => {
           update: {
             status: 'CAPTURED',
             amount: verifiedPaidAmount,
+            bookingId: partnerBooking.id,
             capturedAt: new Date(),
           },
         }),
-        (prisma as any).customSectionBooking.update({
+        prisma.booking.update({
           where: { id: targetSectionBookingId },
           data: {
             status: 'CONFIRMED',
-            paymentStatus: 'PAID',
+            paymentStatus: 'CAPTURED',
+            razorpayOrderId: razorpay_order_id,
+            razorpayPaymentId: razorpay_payment_id,
           },
         }),
       ]);
 
+      // Notify Partner immediately of paid confirmation
+      try {
+        const notif = await prisma.notification.create({
+          data: {
+            title: `💰 Payment Received: Booking Confirmed!`,
+            message: `Booking #${partnerBooking.ticketId || partnerBooking.id} is confirmed. ₹${verifiedPaidAmount} received.`,
+            targetRole: 'PARTNER',
+            type: 'IN_APP',
+          },
+        });
+        await prisma.partnerNotification.create({
+          data: {
+            partnerId: partnerBooking.partnerId,
+            notificationId: notif.id,
+          },
+        });
+      } catch (err) {
+        console.warn('Partner notification error (non-fatal):', err);
+      }
+
       return res.status(200).json({
         success: true,
-        message: 'Section reservation payment verified and confirmed.',
+        message: 'Partner reservation payment verified and confirmed.',
       });
     }
 
