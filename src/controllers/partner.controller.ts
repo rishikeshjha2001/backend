@@ -1315,7 +1315,33 @@ export const getPartnerNotifications = async (req: Request, res: Response) => {
       });
     }
 
-    return res.json({ success: true, data: notifications });
+    // Merge public broadcasts targeted to ALL or PARTNER
+    const partnerNotifIds = new Set(notifications.map(pn => pn.notificationId));
+    const publicNotifs = await prisma.notification.findMany({
+      where: {
+        targetRole: { in: ['ALL', 'PARTNER'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+    });
+
+    const additionalPublic = publicNotifs
+      .filter(pn => !partnerNotifIds.has(pn.id))
+      .map(pn => ({
+        id: `pub_${pn.id}`,
+        partnerId,
+        notificationId: pn.id,
+        isRead: false,
+        createdAt: pn.createdAt,
+        notification: pn,
+      }));
+
+    const combined = [...notifications, ...additionalPublic].sort((a, b) => 
+      new Date(b.createdAt || (b as any).notification?.createdAt || 0).getTime() -
+      new Date(a.createdAt || (a as any).notification?.createdAt || 0).getTime()
+    );
+
+    return res.json({ success: true, data: combined });
   } catch (error: any) {
     console.error('Get notifications error:', error);
     return res.status(500).json({ success: false, error: 'Failed to fetch notifications.' });

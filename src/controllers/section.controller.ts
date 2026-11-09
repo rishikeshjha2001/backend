@@ -412,7 +412,17 @@ export const getSectionItemById = async (req: Request, res: Response) => {
         availableTimes: ['10:00 AM - 02:00 PM', '02:30 PM - 06:30 PM', '07:00 PM - 11:30 PM'],
         availableDates: [],
         capacity: partnerService.capacity || 100,
-        tags: [partnerService.category, partnerService.city || 'Verified'],
+        tags: [
+          partnerService.category,
+          partnerService.category ? partnerService.category.replace(/_/g, ' ').toLowerCase() : '',
+          partnerService.subCategory || '',
+          partnerService.city || 'Verified',
+          String(partnerService.category).includes('MANDAP') || String(partnerService.category).includes('VENUE') ? 'wedding' : '',
+          String(partnerService.category).includes('CATERING') ? 'catering' : '',
+          String(partnerService.category).includes('DJ') ? 'dj sound' : '',
+          String(partnerService.category).includes('DECOR') ? 'decor' : '',
+          String(partnerService.category).includes('PHOTO') ? 'photography' : '',
+        ].filter(Boolean),
         description: partnerService.description,
         rating: partnerService.rating || 4.9,
         reviews: partnerService.totalBookings || 12,
@@ -449,7 +459,7 @@ export const getSectionItemById = async (req: Request, res: Response) => {
         availableTimes: ['Full Day (09:00 AM - 11:00 PM)'],
         availableDates: [],
         capacity: 250,
-        tags: ['Venue', venue.city || 'Verified'],
+        tags: ['Venue', 'wedding', 'banquet', 'palace', venue.city || 'Verified'],
         description: venue.description,
         rating: 4.9,
         reviews: 24,
@@ -537,6 +547,17 @@ export const createSectionItem = async (req: Request, res: Response) => {
 
     const isTicketItem = String(itemType).toUpperCase() === 'TICKET';
 
+    // Parse tags into clean array
+    let tagArr: string[] = [];
+    if (Array.isArray(tags)) {
+      tagArr = tags.map(t => String(t).trim()).filter(Boolean);
+    } else if (typeof tags === 'string') {
+      tagArr = tags.split(',').map(t => t.trim()).filter(Boolean);
+    }
+    if (tagArr.length === 0 && finalBadge) {
+      tagArr = [finalBadge];
+    }
+
     const item = await (prisma as any).customSectionItem.create({
       data: {
         sectionId: sectionId || undefined,
@@ -556,7 +577,7 @@ export const createSectionItem = async (req: Request, res: Response) => {
         rating: 4.9,
         reviews: 0,
         image: image?.trim() || 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80',
-        tags: Array.isArray(tags) ? tags : [finalBadge],
+        tags: tagArr,
         description: description?.trim() || null,
         isActive: true,
       },
@@ -637,7 +658,13 @@ export const updateSectionItem = async (req: Request, res: Response) => {
       updateData.availableDates = [];
     }
     if (tags !== undefined) {
-      updateData.tags = Array.isArray(tags) ? tags : [badge || 'Featured'];
+      let tagArr: string[] = [];
+      if (Array.isArray(tags)) {
+        tagArr = tags.map(t => String(t).trim()).filter(Boolean);
+      } else if (typeof tags === 'string') {
+        tagArr = tags.split(',').map(t => t.trim()).filter(Boolean);
+      }
+      updateData.tags = tagArr.length > 0 ? tagArr : (badge ? [badge] : ['Featured']);
     }
 
     const updated = await (prisma as any).customSectionItem.update({
