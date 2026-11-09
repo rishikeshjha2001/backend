@@ -18,6 +18,10 @@ import {
   getMySectionBookings,
   getAllSectionBookings,
   updateSectionBookingStatus,
+  getAllAdvanceFilters,
+  createAdvanceFilter,
+  updateAdvanceFilter,
+  deleteAdvanceFilter,
 } from '../controllers/section.controller';
 import { optionalAuth, requireAdmin } from '../middleware/auth.middleware';
 
@@ -29,6 +33,12 @@ const router = Router();
 router.get('/', getAllSections);
 router.get('/categories', getAllCategories);
 router.get('/categories/:id', getCategoryById);
+
+// Advance celebration filters & themes (Must precede /:id)
+router.get('/filters', getAllAdvanceFilters);
+router.post('/filters', requireAdmin, createAdvanceFilter);
+router.put('/filters/:id', requireAdmin, updateAdvanceFilter);
+router.delete('/filters/:id', requireAdmin, deleteAdvanceFilter);
 
 // Dynamic item bookings & booking lists (Must precede /:id)
 router.get('/bookings/my', optionalAuth, getMySectionBookings);

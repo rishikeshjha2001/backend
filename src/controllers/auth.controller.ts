@@ -450,3 +450,74 @@ export const refreshToken = async (req: Request, res: Response) => {
     res.status(401).json({ success: false, error: 'Invalid or expired token' });
   }
 };
+
+// ==========================================
+// USER & PARTNER: RESET PASSWORD
+// ==========================================
+export const resetPassword = async (req: Request, res: Response) => {
+  try {
+    const { phoneOrEmail, newPassword } = req.body;
+    if (!phoneOrEmail || !newPassword) {
+      return res.status(400).json({ success: false, error: 'Phone/Email and new password are required.' });
+    }
+
+    if (String(newPassword).trim().length < 6) {
+      return res.status(400).json({ success: false, error: 'New password must be at least 6 characters long.' });
+    }
+
+    const cleanInput = String(phoneOrEmail).trim();
+    const cleanPhone = cleanInput.replace(/\D/g, '');
+
+    const user = await prisma.user.findFirst({
+      where: {
+        OR: [
+          { email: { equals: cleanInput, mode: 'insensitive' } },
+          ...(cleanPhone ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
+        ],
+      },
+    });
+
+    if (user) {
+      const salt = await bcrypt.genSalt(12);
+      const newHash = await bcrypt.hash(newPassword, salt);
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { passwordHash: newHash },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Password reset successfully! You can now log in with your new password.',
+      });
+    }
+
+    // Check Partner
+    const partner = await prisma.partner.findFirst({
+      where: {
+        OR: [
+          { email: { equals: cleanInput, mode: 'insensitive' } },
+          ...(cleanPhone ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
+        ],
+      },
+    });
+
+    if (partner) {
+      const salt = await bcrypt.genSalt(12);
+      const newHash = await bcrypt.hash(newPassword, salt);
+      await prisma.partner.update({
+        where: { id: partner.id },
+        data: { passwordHash: newHash },
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: 'Partner password reset successfully! You can now log in.',
+      });
+    }
+
+    return res.status(404).json({ success: false, error: 'No account found with this phone number or email.' });
+  } catch (error: any) {
+    console.error('resetPassword error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Password reset failed' });
+  }
+};

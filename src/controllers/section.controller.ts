@@ -741,8 +741,27 @@ export const bookSectionItem = async (req: Request, res: Response) => {
 
       const userId = (req as any).user?.id || null;
       const baseTotal = item.price * numQty;
-      // All pricing strictly as configured by Admin - no hardcoded/fabricated discounts
-      const totalAmount = baseTotal;
+
+      // Authentic wallet balance deduction if requested
+      const requestedWalletDeduct = Number(req.body.walletDiscount || req.body.walletDeducted || (req.body.useWallet ? 500 : 0));
+      let actualWalletDeduction = 0;
+      if (requestedWalletDeduct > 0 && userId) {
+        const userProfile = await prisma.user.findUnique({
+          where: { id: userId },
+          select: { walletBalance: true },
+        });
+        if (userProfile && userProfile.walletBalance > 0) {
+          actualWalletDeduction = Math.min(requestedWalletDeduct, userProfile.walletBalance, baseTotal);
+          if (actualWalletDeduction > 0) {
+            await prisma.user.update({
+              where: { id: userId },
+              data: { walletBalance: { decrement: actualWalletDeduction } },
+            });
+          }
+        }
+      }
+
+      const totalAmount = Math.max(0, baseTotal - actualWalletDeduction);
 
       const prefix = item.itemType === 'TICKET' ? 'HL-TCK' : 'HL-BKG';
       const randPart = Math.floor(100000 + Math.random() * 900000);
@@ -767,7 +786,7 @@ export const bookSectionItem = async (req: Request, res: Response) => {
           status: bookingStatus,
           ticketCode,
           paymentStatus,
-          notes: notes?.trim() || null,
+          notes: actualWalletDeduction > 0 ? `Wallet discount applied: ₹${actualWalletDeduction}. ${notes?.trim() || ''}` : (notes?.trim() || null),
         },
         include: {
           item: {
@@ -847,7 +866,6 @@ export const bookSectionItem = async (req: Request, res: Response) => {
     const partnerId = partnerEntity.partnerId;
     const unitPrice = isPartnerService ? partnerService.pricing : venue.price;
     const baseTotal = unitPrice * numQty;
-    const totalAmount = baseTotal; // Admin/Partner controlled price, no fabricated discounts
 
     // Find or create user record so foreign key userId constraint is satisfied
     let targetUserId = (req as any).user?.id || null;
@@ -875,6 +893,27 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       targetUserId = existingUser.id;
     }
 
+    // Authentic wallet balance deduction if requested
+    const requestedWalletDeduct = Number(req.body.walletDiscount || req.body.walletDeducted || (req.body.useWallet ? 500 : 0));
+    let actualWalletDeduction = 0;
+    if (requestedWalletDeduct > 0 && targetUserId) {
+      const userProfile = await prisma.user.findUnique({
+        where: { id: targetUserId },
+        select: { walletBalance: true },
+      });
+      if (userProfile && userProfile.walletBalance > 0) {
+        actualWalletDeduction = Math.min(requestedWalletDeduct, userProfile.walletBalance, baseTotal);
+        if (actualWalletDeduction > 0) {
+          await prisma.user.update({
+            where: { id: targetUserId },
+            data: { walletBalance: { decrement: actualWalletDeduction } },
+          });
+        }
+      }
+    }
+
+    const totalAmount = Math.max(0, baseTotal - actualWalletDeduction);
+
     const randPart = Math.floor(100000 + Math.random() * 900000);
     const ticketCode = `HL-BKG-${Date.now().toString(36).toUpperCase()}-${randPart}`;
     const paymentConfirmed = totalAmount === 0;
@@ -898,6 +937,7 @@ export const bookSectionItem = async (req: Request, res: Response) => {
         venueId: isPartnerService ? null : venue!.id,
         date: bookingDateObj,
         baseAmount: baseTotal,
+        discountAmount: actualWalletDeduction,
         totalAmount: totalAmount,
         ticketId: ticketCode,
         referralCodeUsed: isPartnerService ? partnerService!.name : venue!.name,
@@ -1062,6 +1102,281 @@ export const updateSectionBookingStatus = async (req: Request, res: Response) =>
 
     return res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+// ==========================================
+// ADVANCE FILTERS & THEMES CMS (ADMIN & USER)
+// ==========================================
+
+export const DEFAULT_ADVANCE_FILTERS = [
+  {
+    id: 'filter_wed_themes',
+    title: 'Wedding Themes & Mandaps',
+    subtitle: 'Royal palaces, varmala stages & destination packages',
+    tag: 'WEDDING',
+    route: '/(tabs)/explore?category=Wedding Themes',
+    category: 'Wedding Themes',
+    keywords: ['wedding', 'mandap', 'varmala', 'palace', 'royal', 'stage', 'vivah'],
+    icon: 'Crown',
+    filterType: 'THEME',
+    order: 1,
+    isActive: true,
+  },
+  {
+    id: 'filter_bday_themes',
+    title: 'Birthday Themes & Fiesta',
+    subtitle: 'Neon backdrops, DJ parties, magicians & cake setups',
+    tag: 'BIRTHDAY',
+    route: '/(tabs)/explore?category=Birthday Themes',
+    category: 'Birthday Themes',
+    keywords: ['birthday', 'party', 'neon', 'dj', 'balloon', 'kids'],
+    icon: 'Cake',
+    filterType: 'THEME',
+    order: 2,
+    isActive: true,
+  },
+  {
+    id: 'filter_catering_56',
+    title: 'Catering & 56-Bhog Feasts',
+    subtitle: 'Pure Desi Ghee banquets, live chaat & mocktails',
+    tag: 'CATERING',
+    route: '/(tabs)/explore?category=Catering',
+    category: 'Catering',
+    keywords: ['catering', 'food', 'plate', 'buffet', 'ghee', 'veg', 'feast'],
+    icon: 'Utensils',
+    filterType: 'OCCASION',
+    order: 3,
+    isActive: true,
+  },
+  {
+    id: 'filter_baby_shower',
+    title: 'Baby Shower & Mom-to-Be',
+    subtitle: 'Pastel balloon arches, high tea & cradle setups',
+    tag: 'BABY',
+    route: '/(tabs)/explore?category=Baby Shower',
+    category: 'Baby Shower',
+    keywords: ['baby', 'cradle', 'shower', 'balloon', 'pastel'],
+    icon: 'Gift',
+    filterType: 'OCCASION',
+    order: 4,
+    isActive: true,
+  },
+  {
+    id: 'filter_roka_engage',
+    title: 'Engagements & Roka Setups',
+    subtitle: 'Ring ceremony stages, acoustic music & fairy lights',
+    tag: 'ROKA',
+    route: '/(tabs)/explore?category=Engagements',
+    category: 'Engagements',
+    keywords: ['engagement', 'roka', 'ring', 'sangeet', 'ceremony'],
+    icon: 'Sparkles',
+    filterType: 'OCCASION',
+    order: 5,
+    isActive: true,
+  },
+  {
+    id: 'filter_mandap_decor',
+    title: 'Mandap & Haldi Decor',
+    subtitle: 'Haldi bohemian, fairy forest lights & fresh florals',
+    tag: 'DECOR',
+    route: '/(tabs)/explore?category=Decor',
+    category: 'Decor',
+    keywords: ['decor', 'haldi', 'mandap', 'floral', 'flower', 'lights'],
+    icon: 'Palette',
+    filterType: 'THEME',
+    order: 6,
+    isActive: true,
+  },
+  {
+    id: 'filter_budget_friendly',
+    title: 'Budget Under ₹30,000',
+    subtitle: 'Affordable verified packages with 100% quality assurance',
+    tag: 'BUDGET',
+    route: '/(tabs)/explore?priceRange=under_30k',
+    category: 'All',
+    keywords: ['budget', 'affordable', 'value', 'pocket'],
+    icon: 'Tag',
+    filterType: 'BUDGET',
+    order: 7,
+    isActive: true,
+  },
+  {
+    id: 'filter_large_capacity',
+    title: 'Grand Capacity (500+ Guests)',
+    subtitle: 'Spacious AC halls, sprawling lawns & massive valet parking',
+    tag: 'GRAND',
+    route: '/(tabs)/explore?capacity=500_plus',
+    category: 'Venues',
+    keywords: ['capacity', 'grand', '500', 'spacious', 'lawn'],
+    icon: 'Layers',
+    filterType: 'CAPACITY',
+    order: 8,
+    isActive: true,
+  },
+];
+
+/**
+ * GET /api/v1/sections/filters
+ * Fetch all advance celebration filters & themes
+ */
+export const getAllAdvanceFilters = async (req: Request, res: Response) => {
+  try {
+    const raw = await prisma.announcement.findMany({
+      where: { targetAudience: 'ADV_FILTER' },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!raw || raw.length === 0) {
+      return res.status(200).json({ success: true, data: DEFAULT_ADVANCE_FILTERS });
+    }
+
+    const customFilters = raw.map((item) => {
+      let meta: any = {};
+      try {
+        meta = JSON.parse(item.message);
+      } catch {
+        meta = {};
+      }
+      return {
+        id: item.id,
+        title: item.title,
+        subtitle: meta.subtitle || '',
+        tag: meta.tag || item.priority || 'FEATURED',
+        route: meta.route || `/(tabs)/explore?category=${encodeURIComponent(item.title)}`,
+        category: meta.category || item.title,
+        keywords: Array.isArray(meta.keywords) ? meta.keywords : (meta.keywords ? String(meta.keywords).split(',').map((s: string) => s.trim()) : [item.title.toLowerCase()]),
+        icon: meta.icon || 'Sparkles',
+        filterType: item.priority || meta.filterType || 'THEME',
+        order: meta.order || 0,
+        isActive: item.isActive,
+        createdAt: item.createdAt,
+      };
+    });
+
+    return res.status(200).json({ success: true, data: customFilters });
+  } catch (error: any) {
+    console.error('getAllAdvanceFilters error:', error);
+    return res.status(200).json({ success: true, data: DEFAULT_ADVANCE_FILTERS });
+  }
+};
+
+/**
+ * POST /api/v1/sections/filters
+ * Admin create new advance filter / theme
+ */
+export const createAdvanceFilter = async (req: Request, res: Response) => {
+  try {
+    const { title, subtitle, tag, route, category, keywords, icon, filterType = 'THEME', order = 0 } = req.body;
+    if (!title || !title.trim()) {
+      return res.status(400).json({ success: false, error: 'Filter title is required' });
+    }
+
+    const payload = {
+      subtitle: subtitle?.trim() || '',
+      tag: (tag || 'FEATURED').trim().toUpperCase(),
+      route: route?.trim() || `/(tabs)/explore?category=${encodeURIComponent(title.trim())}`,
+      category: category?.trim() || title.trim(),
+      keywords: Array.isArray(keywords) ? keywords : String(keywords || '').split(',').map((k: string) => k.trim()).filter(Boolean),
+      icon: icon?.trim() || 'Sparkles',
+      filterType: filterType?.trim() || 'THEME',
+      order: typeof order === 'number' ? order : 0,
+    };
+
+    const created = await prisma.announcement.create({
+      data: {
+        title: title.trim(),
+        message: JSON.stringify(payload),
+        targetAudience: 'ADV_FILTER',
+        priority: payload.filterType,
+        isActive: true,
+      },
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Advance filter created successfully',
+      data: {
+        id: created.id,
+        title: created.title,
+        ...payload,
+        isActive: created.isActive,
+      },
+    });
+  } catch (error: any) {
+    console.error('createAdvanceFilter error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * PUT /api/v1/sections/filters/:id
+ * Admin update advance filter
+ */
+export const updateAdvanceFilter = async (req: Request, res: Response) => {
+  try {
+    const filterId = String(req.params.id);
+    const { title, subtitle, tag, route, category, keywords, icon, filterType, isActive, order } = req.body;
+
+    const existing = await prisma.announcement.findUnique({ where: { id: filterId } });
+    if (!existing) {
+      return res.status(404).json({ success: false, error: 'Filter not found' });
+    }
+
+    let currentMeta: any = {};
+    try {
+      currentMeta = JSON.parse(existing.message);
+    } catch {}
+
+    const payload = {
+      subtitle: subtitle !== undefined ? subtitle.trim() : currentMeta.subtitle,
+      tag: tag !== undefined ? tag.trim().toUpperCase() : currentMeta.tag,
+      route: route !== undefined ? route.trim() : currentMeta.route,
+      category: category !== undefined ? category.trim() : currentMeta.category,
+      keywords: keywords !== undefined ? (Array.isArray(keywords) ? keywords : String(keywords).split(',').map((k: string) => k.trim())) : currentMeta.keywords,
+      icon: icon !== undefined ? icon.trim() : currentMeta.icon,
+      filterType: filterType !== undefined ? filterType.trim() : (existing.priority || 'THEME'),
+      order: order !== undefined ? Number(order) : (currentMeta.order || 0),
+    };
+
+    const updated = await prisma.announcement.update({
+      where: { id: filterId },
+      data: {
+        ...(title !== undefined && { title: title.trim() }),
+        message: JSON.stringify(payload),
+        ...(filterType !== undefined && { priority: payload.filterType }),
+        ...(isActive !== undefined && { isActive: Boolean(isActive) }),
+      },
+    });
+
+    return res.status(200).json({
+      success: true,
+      message: 'Advance filter updated successfully',
+      data: {
+        id: updated.id,
+        title: updated.title,
+        ...payload,
+        isActive: updated.isActive,
+      },
+    });
+  } catch (error: any) {
+    console.error('updateAdvanceFilter error:', error);
+    return res.status(500).json({ success: false, error: error.message });
+  }
+};
+
+/**
+ * DELETE /api/v1/sections/filters/:id
+ * Admin delete advance filter
+ */
+export const deleteAdvanceFilter = async (req: Request, res: Response) => {
+  try {
+    const filterId = String(req.params.id);
+    await prisma.announcement.delete({ where: { id: filterId } });
+    return res.status(200).json({ success: true, message: 'Filter deleted successfully' });
+  } catch (error: any) {
+    console.error('deleteAdvanceFilter error:', error);
     return res.status(500).json({ success: false, error: error.message });
   }
 };

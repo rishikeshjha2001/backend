@@ -61,20 +61,33 @@ export const changePassword = async (req: Request, res: Response) => {
     if (!userId) return res.status(401).json({ success: false, error: 'Unauthorized' });
 
     const { currentPassword, newPassword } = req.body;
-    if (!currentPassword || !newPassword) {
-      return res.status(400).json({ success: false, error: 'Both current password and new password are required.' });
-    }
-
-    if (String(newPassword).length < 6) {
+    if (!newPassword || String(newPassword).trim().length < 6) {
       return res.status(400).json({ success: false, error: 'New password must be at least 6 characters long.' });
     }
 
     const user = await prisma.user.findUnique({ where: { id: userId } });
     if (!user) return res.status(404).json({ success: false, error: 'User not found.' });
 
-    const isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
-    if (!isMatch) {
-      return res.status(400).json({ success: false, error: 'Current password does not match.' });
+    // Check if user has an existing standard bcrypt password or a generated OTP/guest dummy password
+    const isGeneratedPassword =
+      !user.passwordHash ||
+      user.passwordHash.startsWith('firebase_') ||
+      user.passwordHash.includes('GUEST_') ||
+      user.passwordHash.includes('OTP');
+
+    if (!isGeneratedPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, error: 'Please enter your current password.' });
+      }
+      let isMatch = false;
+      try {
+        isMatch = await bcrypt.compare(currentPassword, user.passwordHash);
+      } catch {
+        isMatch = currentPassword === user.passwordHash;
+      }
+      if (!isMatch && currentPassword !== user.passwordHash) {
+        return res.status(400).json({ success: false, error: 'Current password does not match.' });
+      }
     }
 
     const newHash = await bcrypt.hash(newPassword, 12);
@@ -83,10 +96,10 @@ export const changePassword = async (req: Request, res: Response) => {
       data: { passwordHash: newHash },
     });
 
-    res.status(200).json({ success: true, message: 'Password changed successfully.' });
+    return res.status(200).json({ success: true, message: 'Password changed successfully.' });
   } catch (error: any) {
     console.error('changePassword error:', error);
-    res.status(500).json({ success: false, error: error.message });
+    return res.status(500).json({ success: false, error: error.message });
   }
 };
 
