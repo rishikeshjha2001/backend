@@ -769,8 +769,10 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       const userId = (req as any).user?.id || null;
       const baseTotal = item.price * numQty;
 
-      // Authentic wallet balance deduction if requested
-      const requestedWalletDeduct = Number(req.body.walletDiscount || req.body.walletDeducted || (req.body.useWallet ? 500 : 0));
+      // Authentic wallet balance deduction if requested (strictly based on database balance)
+      const requestedWalletDeduct = req.body.walletDiscount !== undefined || req.body.walletDeducted !== undefined
+        ? Number(req.body.walletDiscount || req.body.walletDeducted)
+        : (req.body.useWallet ? Infinity : 0);
       let actualWalletDeduction = 0;
       if (requestedWalletDeduct > 0 && userId) {
         const userProfile = await prisma.user.findUnique({
@@ -920,8 +922,10 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       targetUserId = existingUser.id;
     }
 
-    // Authentic wallet balance deduction if requested
-    const requestedWalletDeduct = Number(req.body.walletDiscount || req.body.walletDeducted || (req.body.useWallet ? 500 : 0));
+    // Authentic wallet balance deduction if requested (strictly based on database balance)
+    const requestedWalletDeduct = req.body.walletDiscount !== undefined || req.body.walletDeducted !== undefined
+      ? Number(req.body.walletDiscount || req.body.walletDeducted)
+      : (req.body.useWallet ? Infinity : 0);
     let actualWalletDeduction = 0;
     if (requestedWalletDeduct > 0 && targetUserId) {
       const userProfile = await prisma.user.findUnique({
