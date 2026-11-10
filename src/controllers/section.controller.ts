@@ -718,6 +718,11 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       bookingDate,
       bookingTime,
       quantity = 1,
+      guestCount,
+      platesCount,
+      bookingDays,
+      customSubtotal,
+      pricePerPlate,
       userName,
       userPhone,
       userEmail,
@@ -738,6 +743,9 @@ export const bookSectionItem = async (req: Request, res: Response) => {
 
     const cleanDate = String(bookingDate).trim();
     const numQty = Math.max(1, parseInt(quantity) || 1);
+    const numPlates = platesCount ? Math.max(0, parseInt(String(platesCount))) : 0;
+    const numGuests = guestCount ? Math.max(0, parseInt(String(guestCount))) : 0;
+    const numDays = bookingDays ? Math.max(1, parseInt(String(bookingDays))) : 1;
     const targetItemId = String(itemId);
 
     // 1. Try CustomSectionItem (Admin configured section item)
@@ -767,7 +775,25 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       }
 
       const userId = (req as any).user?.id || null;
-      const baseTotal = item.price * numQty;
+      
+      // Dynamic per-person / per-plate / per-day calculation formula decided by admin/partner
+      let baseTotal = 0;
+      const isPlateUnit = (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('PLATE')) ||
+        (item.title && item.title.toLowerCase().includes('catering')) ||
+        (item.badge && item.badge.toLowerCase().includes('plate'));
+
+      if (numPlates > 0 && (isPlateUnit || item.pricePerPlate)) {
+        const plateRate = Number(item.pricePerPlate || item.price);
+        baseTotal = plateRate * numPlates;
+      } else if (numGuests > 1 && (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('PERSON'))) {
+        baseTotal = item.price * numGuests;
+      } else if (numDays > 1 && (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('DAY'))) {
+        baseTotal = item.price * numDays;
+      } else if (customSubtotal && Number(customSubtotal) > 0) {
+        baseTotal = Number(customSubtotal);
+      } else {
+        baseTotal = item.price * numQty;
+      }
 
       // Authentic wallet balance deduction if requested (strictly based on database balance)
       const requestedWalletDeduct = req.body.walletDiscount !== undefined || req.body.walletDeducted !== undefined
@@ -894,7 +920,34 @@ export const bookSectionItem = async (req: Request, res: Response) => {
     const isPartnerService = Boolean(partnerService);
     const partnerId = partnerEntity.partnerId;
     const unitPrice = isPartnerService ? partnerService.pricing : venue.price;
-    const baseTotal = unitPrice * numQty;
+
+    // Dynamic per-person / per-plate / per-day calculation formula for partner services & venues
+    let baseTotal = 0;
+    const isPlateUnit = partnerService?.pricingUnit === 'PER_PLATE' || partnerService?.category === 'CATERING';
+    const isPersonUnit = partnerService?.pricingUnit === 'PER_PERSON';
+
+    if (numPlates > 0 && (isPlateUnit || partnerService?.category === 'CATERING')) {
+      baseTotal = unitPrice * numPlates;
+    } else if (numGuests > 1 && isPersonUnit) {
+      baseTotal = unitPrice * numGuests;
+    } else if (numDays > 1 && (partnerService?.pricingUnit === 'PER_DAY' || venue)) {
+      if (numPlates > 0 && req.body.pricePerPlate) {
+        baseTotal = (unitPrice * numDays) + (Number(req.body.pricePerPlate) * numPlates);
+      } else {
+        baseTotal = unitPrice * numDays;
+      }
+    } else if (customSubtotal && Number(customSubtotal) > 0) {
+      baseTotal = Number(customSubtotal);
+    } else {
+      baseTotal = unitPrice * numQty;
+    }
+
+    const detailNotes = [
+      numPlates > 0 ? `${numPlates} Plates` : null,
+      numGuests > 0 ? `${numGuests} Guests` : null,
+      numDays > 1 ? `${numDays} Days` : null,
+      notes?.trim() || null
+    ].filter(Boolean).join(' • ');
 
     // Find or create user record so foreign key userId constraint is satisfied
     let targetUserId = (req as any).user?.id || null;

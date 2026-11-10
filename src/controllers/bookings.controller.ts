@@ -5,7 +5,7 @@ const prisma = new PrismaClient();
 
 export const createBooking = async (req: Request, res: Response) => {
   try {
-    const { venueId, partnerId, date, totalAmount, referralCode } = req.body;
+    const { venueId, partnerId, date, totalAmount, referralCode, guestsCount, guestCount, platesCount, quantity } = req.body;
 
     // Validation
     if (!venueId || !date) {
@@ -35,7 +35,15 @@ export const createBooking = async (req: Request, res: Response) => {
           });
         }
         resolvedPartnerId = pService.partnerId;
-        basePrice = pService.pricing;
+        const numPlates = Number(platesCount || 0);
+        const numGuests = Number(guestsCount || guestCount || quantity || 1);
+        if (pService.pricingUnit === 'PER_PLATE' || (pService.category === 'CATERING' && numPlates > 0)) {
+          basePrice = pService.pricing * Math.max(1, numPlates || numGuests);
+        } else if (pService.pricingUnit === 'PER_PERSON') {
+          basePrice = pService.pricing * Math.max(1, numGuests);
+        } else {
+          basePrice = pService.pricing;
+        }
       }
     }
 
@@ -106,16 +114,18 @@ export const createBooking = async (req: Request, res: Response) => {
       }
     }
 
-    // Wallet Balance Deduction Option
+    // Wallet Balance Deduction Option (strictly based on authentic database balance)
     let walletDeducted = 0;
-    const requestedWallet = Number(req.body.walletAmount || (req.body.useWallet ? 500 : 0));
+    const requestedWallet = req.body.walletAmount !== undefined || req.body.walletDiscount !== undefined || req.body.walletDeducted !== undefined
+      ? Number(req.body.walletAmount || req.body.walletDiscount || req.body.walletDeducted)
+      : (req.body.useWallet ? Infinity : 0);
     if (requestedWallet > 0 && userId) {
       const userProfile = await prisma.user.findUnique({
         where: { id: userId },
         select: { walletBalance: true },
       });
       if (userProfile && userProfile.walletBalance > 0) {
-        walletDeducted = Math.min(requestedWallet, userProfile.walletBalance, basePrice * 0.5);
+        walletDeducted = Math.min(requestedWallet, userProfile.walletBalance, basePrice);
         if (walletDeducted > 0) {
           await prisma.user.update({
             where: { id: userId },

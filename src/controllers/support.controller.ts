@@ -13,24 +13,28 @@ let inMemorySupportTickets: any[] = [];
 export const createSupportTicket = async (req: Request, res: Response) => {
   try {
     const { userName, userEmail, userPhone, category, subject, message, priority, userId } = req.body;
+    const authenticatedUser = (req as any).user;
+    const authenticatedUserId = authenticatedUser?.id;
+    const finalName = String(userName || authenticatedUser?.name || 'HappyLokam User').trim();
+    const finalPhone = String(userPhone || authenticatedUser?.phone || '').trim();
+    const finalEmail = userEmail ? String(userEmail).trim().toLowerCase() : (authenticatedUser?.email || null);
 
-    if (!userName || !userPhone || !subject || !message) {
+    if (!finalName || !subject || !message) {
       return res.status(400).json({
         success: false,
-        error: 'Please provide your name, phone number, subject, and detailed message.',
+        error: 'Please provide your name, subject, and detailed message.',
       });
     }
 
-    const authenticatedUserId = (req as any).user?.id;
-    const cleanPhone = String(userPhone).replace(/\D/g, '').slice(-10);
+    const cleanPhone = finalPhone ? finalPhone.replace(/\D/g, '').slice(-10) : '';
     const ticketNumber = `HL-SUP-${Math.floor(1000 + Math.random() * 9000)}`;
 
     const newTicketData = {
       ticketNumber,
       userId: authenticatedUserId || userId || null,
-      userName: String(userName).trim(),
-      userEmail: userEmail ? String(userEmail).trim().toLowerCase() : null,
-      userPhone: cleanPhone || String(userPhone).trim(),
+      userName: finalName,
+      userEmail: finalEmail,
+      userPhone: cleanPhone || finalPhone || 'Online App User',
       category: category ? String(category).trim().toUpperCase() : 'GENERAL',
       subject: String(subject).trim(),
       message: String(message).trim(),
@@ -261,15 +265,17 @@ export const getUserSupportTickets = async (req: Request, res: Response) => {
     const caller = (req as any).user;
     let targetPhone = req.query.phone ? String(req.query.phone).trim() : null;
     let targetUserId = caller?.id || null;
+    let targetEmail = req.query.email ? String(req.query.email).trim() : (caller?.email || null);
 
-    // Security check: If caller is authenticated as USER, lock to their phone or ID
+    // Security check: If caller is authenticated as USER, lock to their phone, email or ID
     if (caller && caller.role !== 'ADMIN' && caller.role !== 'SUPER_ADMIN') {
       targetPhone = caller.phone || targetPhone;
       targetUserId = caller.id;
+      targetEmail = caller.email || targetEmail;
     }
 
-    if (!targetPhone && !targetUserId) {
-      return res.status(400).json({ success: false, error: 'Phone number or user authentication required to retrieve tickets.' });
+    if (!targetPhone && !targetUserId && !targetEmail) {
+      return res.status(400).json({ success: false, error: 'Phone number, email or user authentication required to retrieve tickets.' });
     }
 
     const cleanPhone = targetPhone ? targetPhone.replace(/\D/g, '').slice(-10) : '';
@@ -281,6 +287,7 @@ export const getUserSupportTickets = async (req: Request, res: Response) => {
         if (targetUserId) orClauses.push({ userId: targetUserId });
         if (cleanPhone) orClauses.push({ userPhone: { contains: cleanPhone } });
         if (targetPhone) orClauses.push({ userPhone: targetPhone });
+        if (targetEmail) orClauses.push({ userEmail: { equals: targetEmail, mode: 'insensitive' } });
 
         tickets = await (prisma as any).supportTicket.findMany({
           where: { OR: orClauses },
@@ -291,8 +298,12 @@ export const getUserSupportTickets = async (req: Request, res: Response) => {
       console.warn('[SupportTicket] User tickets DB error:', dbErr);
     }
 
-    if (tickets.length === 0 && cleanPhone) {
-      tickets = inMemorySupportTickets.filter(t => t.userPhone?.includes(cleanPhone) || (targetUserId && t.userId === targetUserId));
+    if (tickets.length === 0 && (cleanPhone || targetUserId || targetEmail)) {
+      tickets = inMemorySupportTickets.filter(t => 
+        (cleanPhone && t.userPhone?.includes(cleanPhone)) ||
+        (targetUserId && t.userId === targetUserId) ||
+        (targetEmail && t.userEmail?.toLowerCase() === targetEmail.toLowerCase())
+      );
     }
 
     res.status(200).json({ success: true, data: tickets });
