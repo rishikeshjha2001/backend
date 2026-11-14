@@ -778,21 +778,33 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       
       // Dynamic per-person / per-plate / per-day calculation formula decided by admin/partner
       let baseTotal = 0;
-      const isPlateUnit = (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('PLATE')) ||
-        (item.title && item.title.toLowerCase().includes('catering')) ||
-        (item.badge && item.badge.toLowerCase().includes('plate'));
-
-      if (numPlates > 0 && (isPlateUnit || item.pricePerPlate)) {
-        const plateRate = Number(item.pricePerPlate || item.price);
-        baseTotal = plateRate * numPlates;
-      } else if (numGuests > 1 && (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('PERSON'))) {
-        baseTotal = item.price * numGuests;
-      } else if (numDays > 1 && (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('DAY'))) {
-        baseTotal = item.price * numDays;
-      } else if (customSubtotal && Number(customSubtotal) > 0) {
-        baseTotal = Number(customSubtotal);
+      if (customSubtotal && Number(customSubtotal) > 0) {
+        baseTotal = Math.round(Number(customSubtotal) * 100) / 100;
       } else {
-        baseTotal = item.price * numQty;
+        const isPlateUnit = (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('PLATE')) ||
+          (item.title && item.title.toLowerCase().includes('catering')) ||
+          (item.badge && item.badge.toLowerCase().includes('plate'));
+        const plateRate = Number(item.pricePerPlate || (isPlateUnit ? item.price : 0));
+        const hallRate = Number(item.baseHallPrice || 0);
+        const guestRate = Number(item.pricePerGuest || 0);
+        const days = Math.max(1, numDays);
+
+        if (numPlates > 0 && plateRate > 0) {
+          baseTotal = (hallRate * days) + (plateRate * numPlates) + (numGuests > 0 ? guestRate * numGuests : 0);
+        } else if (numGuests > 0 && guestRate > 0) {
+          baseTotal = (hallRate * days) + (guestRate * numGuests);
+        } else if (numGuests > 1 && (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('PERSON'))) {
+          baseTotal = item.price * numGuests * days;
+        } else if (numDays > 1 && (item.pricingUnit && String(item.pricingUnit).toUpperCase().includes('DAY'))) {
+          baseTotal = item.price * numDays;
+        } else {
+          baseTotal = item.price * numQty;
+        }
+
+        // Razorpay 2% Commission + 18% GST on that 2% Commission (2.36% total)
+        const gatewayCommission = baseTotal * 0.02;
+        const gatewayGst = gatewayCommission * 0.18;
+        baseTotal = Math.round((baseTotal + gatewayCommission + gatewayGst) * 100) / 100;
       }
 
       // Authentic wallet balance deduction if requested (strictly based on database balance)
@@ -923,23 +935,28 @@ export const bookSectionItem = async (req: Request, res: Response) => {
 
     // Dynamic per-person / per-plate / per-day calculation formula for partner services & venues
     let baseTotal = 0;
-    const isPlateUnit = partnerService?.pricingUnit === 'PER_PLATE' || partnerService?.category === 'CATERING';
-    const isPersonUnit = partnerService?.pricingUnit === 'PER_PERSON';
-
-    if (numPlates > 0 && (isPlateUnit || partnerService?.category === 'CATERING')) {
-      baseTotal = unitPrice * numPlates;
-    } else if (numGuests > 1 && isPersonUnit) {
-      baseTotal = unitPrice * numGuests;
-    } else if (numDays > 1 && (partnerService?.pricingUnit === 'PER_DAY' || venue)) {
-      if (numPlates > 0 && req.body.pricePerPlate) {
-        baseTotal = (unitPrice * numDays) + (Number(req.body.pricePerPlate) * numPlates);
-      } else {
-        baseTotal = unitPrice * numDays;
-      }
-    } else if (customSubtotal && Number(customSubtotal) > 0) {
-      baseTotal = Number(customSubtotal);
+    if (customSubtotal && Number(customSubtotal) > 0) {
+      baseTotal = Math.round(Number(customSubtotal) * 100) / 100;
     } else {
-      baseTotal = unitPrice * numQty;
+      const isPlateUnit = partnerService?.pricingUnit === 'PER_PLATE' || partnerService?.category === 'CATERING';
+      const isPersonUnit = partnerService?.pricingUnit === 'PER_PERSON';
+      const plateRate = Number(req.body.pricePerPlate || (isPlateUnit ? unitPrice : 0));
+      const days = Math.max(1, numDays);
+
+      if (numPlates > 0 && plateRate > 0) {
+        baseTotal = (unitPrice * days) + (plateRate * numPlates);
+      } else if (numGuests > 1 && isPersonUnit) {
+        baseTotal = unitPrice * numGuests * days;
+      } else if (numDays > 1 && (partnerService?.pricingUnit === 'PER_DAY' || venue)) {
+        baseTotal = unitPrice * numDays;
+      } else {
+        baseTotal = unitPrice * numQty;
+      }
+
+      // Razorpay 2% Commission + 18% GST on that 2% Commission (2.36% total)
+      const gatewayCommission = baseTotal * 0.02;
+      const gatewayGst = gatewayCommission * 0.18;
+      baseTotal = Math.round((baseTotal + gatewayCommission + gatewayGst) * 100) / 100;
     }
 
     const detailNotes = [
