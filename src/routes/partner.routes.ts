@@ -32,6 +32,7 @@ import {
   payServerCharge,
   verifyServerCharge,
   getPartnerSubscriptionConfig,
+  changePartnerPassword,
 } from '../controllers/partner.controller';
 
 const router = Router();
@@ -68,6 +69,8 @@ router.get('/subscription-config', getPartnerSubscriptionConfig);
 // ==========================================
 router.get('/me', requirePartner, getPartnerProfile);
 router.put('/update-profile', requirePartner, updatePartnerProfile);
+router.post('/change-password', requirePartner, changePartnerPassword);
+router.put('/change-password', requirePartner, changePartnerPassword);
 router.post('/logout', requirePartner, logoutPartner);
 
 // Partner ₹99 Server Charge & Cloud Activation

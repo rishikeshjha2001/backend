@@ -88,21 +88,28 @@ export const createOrder = async (req: Request, res: Response) => {
         },
       });
     } catch (err: any) {
-      console.warn('Razorpay SDK order creation fallback:', err.message);
-      // Fallback mock order if test keys are used in automated development/tests
-      order = {
-        id: `order_mock_${Date.now()}`,
-        amount: amountInPaise,
-        currency,
-        receipt,
-        status: 'created',
-        notes: {
-          purpose: targetPurpose,
-          targetId,
-          userId,
-          amountInRupees: String(targetAmount),
-        },
-      };
+      console.warn('Razorpay SDK order creation notice:', err.message);
+      // Only permit mock fallback when running in strictly defined automated test suites
+      if (process.env.NODE_ENV === 'test' && process.env.ALLOW_MOCK_PAYMENT === 'true') {
+        order = {
+          id: `order_mock_${Date.now()}`,
+          amount: amountInPaise,
+          currency,
+          receipt,
+          status: 'created',
+          notes: {
+            purpose: targetPurpose,
+            targetId,
+            userId,
+            amountInRupees: String(targetAmount),
+          },
+        };
+      } else {
+        return res.status(502).json({
+          success: false,
+          error: 'Payment gateway rejected order creation: ' + (err.message || 'Payment gateway unavailable. Please verify payment configuration.'),
+        });
+      }
     }
 
     // Record order in payments table

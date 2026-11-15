@@ -1945,3 +1945,53 @@ export const getPartnerSubscriptionConfig = async (req: Request, res: Response) 
   }
 };
 
+
+/**
+ * POST /api/v1/partners/change-password
+ * Change password for authenticated partner
+ */
+export const changePartnerPassword = async (req: Request, res: Response) => {
+  try {
+    const partnerId = (req as any).partner?.id || (req as any).user?.id;
+    if (!partnerId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. Partner authentication required.' });
+    }
+
+    const { currentPassword, newPassword } = req.body;
+    if (!newPassword || String(newPassword).trim().length < 6) {
+      return res.status(400).json({ success: false, error: 'New password must be at least 6 characters long.' });
+    }
+
+    const partner = await prisma.partner.findUnique({ where: { id: partnerId } });
+    if (!partner) {
+      return res.status(404).json({ success: false, error: 'Partner account not found.' });
+    }
+
+    // Check current password if not registered via OTP/Google placeholder
+    if (partner.passwordHash && !partner.passwordHash.startsWith('otp_') && !partner.passwordHash.startsWith('google_')) {
+      if (!currentPassword) {
+        return res.status(400).json({ success: false, error: 'Please enter your current password.' });
+      }
+      let isMatch = false;
+      try {
+        isMatch = await bcrypt.compare(currentPassword, partner.passwordHash);
+      } catch {
+        isMatch = currentPassword === partner.passwordHash;
+      }
+      if (!isMatch) {
+        return res.status(400).json({ success: false, error: 'Current password does not match.' });
+      }
+    }
+
+    const newHash = await bcrypt.hash(String(newPassword).trim(), 12);
+    await prisma.partner.update({
+      where: { id: partnerId },
+      data: { passwordHash: newHash },
+    });
+
+    return res.status(200).json({ success: true, message: 'Partner account password updated successfully.' });
+  } catch (error: any) {
+    console.error('changePartnerPassword error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+};
