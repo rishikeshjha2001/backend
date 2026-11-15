@@ -812,6 +812,16 @@ export const addPartnerService = async (req: Request, res: Response) => {
         pricing: parseFloat(pricing),
         pricingUnit: pricingUnit || 'PER_EVENT',
         capacity: capacity ? parseInt(capacity) : null,
+        minGuests: req.body.minGuests ? parseInt(String(req.body.minGuests)) : 50,
+        maxGuests: req.body.maxGuests ? parseInt(String(req.body.maxGuests)) : 500,
+        blackoutDates: Array.isArray(req.body.blackoutDates) ? req.body.blackoutDates : [],
+        slotTimes: Array.isArray(req.body.slotTimes) ? req.body.slotTimes : [],
+        advanceNoticeHours: req.body.advanceNoticeHours ? parseInt(String(req.body.advanceNoticeHours)) : 24,
+        autoAccept: req.body.autoAccept !== undefined ? Boolean(req.body.autoAccept) : true,
+        pricePerPlate: req.body.pricePerPlate ? parseFloat(String(req.body.pricePerPlate)) : null,
+        baseHallPrice: req.body.baseHallPrice ? parseFloat(String(req.body.baseHallPrice)) : null,
+        pricePerGuest: req.body.pricePerGuest ? parseFloat(String(req.body.pricePerGuest)) : null,
+        cancellationPolicy: req.body.cancellationPolicy || 'FLEXIBLE',
         images: Array.isArray(images) ? images : [],
         documents: Array.isArray(documents) ? documents : [],
         features: Array.isArray(features) ? features : [],
@@ -871,6 +881,16 @@ export const updatePartnerService = async (req: Request, res: Response) => {
         ...(pricing && { pricing: parseFloat(pricing) }),
         ...(pricingUnit && { pricingUnit }),
         ...(capacity !== undefined && { capacity: capacity ? parseInt(capacity) : null }),
+        ...(req.body.minGuests !== undefined && { minGuests: parseInt(String(req.body.minGuests)) }),
+        ...(req.body.maxGuests !== undefined && { maxGuests: parseInt(String(req.body.maxGuests)) }),
+        ...(Array.isArray(req.body.blackoutDates) && { blackoutDates: req.body.blackoutDates }),
+        ...(Array.isArray(req.body.slotTimes) && { slotTimes: req.body.slotTimes }),
+        ...(req.body.advanceNoticeHours !== undefined && { advanceNoticeHours: parseInt(String(req.body.advanceNoticeHours)) }),
+        ...(req.body.autoAccept !== undefined && { autoAccept: Boolean(req.body.autoAccept) }),
+        ...(req.body.pricePerPlate !== undefined && { pricePerPlate: req.body.pricePerPlate ? parseFloat(String(req.body.pricePerPlate)) : null }),
+        ...(req.body.baseHallPrice !== undefined && { baseHallPrice: req.body.baseHallPrice ? parseFloat(String(req.body.baseHallPrice)) : null }),
+        ...(req.body.pricePerGuest !== undefined && { pricePerGuest: req.body.pricePerGuest ? parseFloat(String(req.body.pricePerGuest)) : null }),
+        ...(req.body.cancellationPolicy && { cancellationPolicy: req.body.cancellationPolicy }),
         ...(images && { images }),
         ...(documents && { documents }),
         ...(features && { features }),
@@ -976,11 +996,19 @@ export const getPartnerBookings = async (req: Request, res: Response) => {
       prisma.booking.count({ where }),
     ]);
 
-    const formattedVenue = bookings.map((b) => ({
+    const formattedVenue = bookings.map((b: any) => ({
       id: b.id,
       ticketId: b.ticketId || b.id,
+      ticketCode: b.ticketId || b.id,
       date: b.date,
       bookingDate: b.date,
+      bookingTime: b.bookingTime || null,
+      bookingDays: b.bookingDays || 1,
+      guestCount: b.guestCount || 0,
+      platesCount: b.platesCount || 0,
+      checkInOtp: b.checkInOtp || null,
+      checkInStatus: b.checkInStatus || 'PENDING',
+      checkedInAt: b.checkedInAt || null,
       createdAt: b.createdAt,
       totalAmount: b.totalAmount,
       baseAmount: b.baseAmount,
@@ -999,7 +1027,15 @@ export const getPartnerBookings = async (req: Request, res: Response) => {
     const formattedSection = (sectionBookings || []).map((sb: any) => ({
       id: sb.id,
       ticketId: sb.ticketCode || sb.id,
+      ticketCode: sb.ticketCode || sb.id,
       bookingDate: sb.bookingDate,
+      bookingTime: sb.bookingTime || null,
+      bookingDays: sb.bookingDays || 1,
+      guestCount: sb.guestCount || 0,
+      platesCount: sb.platesCount || 0,
+      checkInOtp: sb.checkInOtp || null,
+      checkInStatus: sb.checkInStatus || 'PENDING',
+      checkedInAt: sb.checkedInAt || null,
       createdAt: sb.createdAt,
       totalAmount: sb.totalAmount,
       baseAmount: sb.totalAmount,
@@ -1058,6 +1094,27 @@ export const getPartnerBookingDetail = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
+      const sectionBooking = await (prisma as any).customSectionBooking.findUnique({
+        where: { id },
+        include: { item: true },
+      });
+      if (sectionBooking) {
+        return res.json({
+          success: true,
+          data: {
+            ...sectionBooking,
+            date: sectionBooking.bookingDate,
+            ticketId: sectionBooking.ticketCode || sectionBooking.id,
+            serviceName: sectionBooking.item?.title || 'Celebration Booking',
+            listing: { name: sectionBooking.item?.title || 'Celebration Booking' },
+            venue: { name: sectionBooking.item?.title, city: sectionBooking.item?.location },
+            user: { name: sectionBooking.userName, phone: sectionBooking.userPhone, email: sectionBooking.userEmail },
+            customerName: sectionBooking.userName,
+            customerPhone: sectionBooking.userPhone,
+            customerEmail: sectionBooking.userEmail,
+          },
+        });
+      }
       return res.status(404).json({ success: false, error: 'Booking not found.' });
     }
 
@@ -1081,8 +1138,8 @@ export const getPartnerBookingDetail = async (req: Request, res: Response) => {
 export const updateBookingStatus = async (req: Request, res: Response) => {
   try {
     const id = String(req.params.id);
-    const { status } = req.body;
-    const validStatuses = ['CONFIRMED', 'COMPLETED', 'CANCELLED'];
+    const { status, otp, qrCode } = req.body;
+    const validStatuses = ['CONFIRMED', 'CHECKED_IN', 'COMPLETED', 'CANCELLED'];
 
     if (!status || !validStatuses.includes(status)) {
       return res.status(400).json({
@@ -1090,6 +1147,9 @@ export const updateBookingStatus = async (req: Request, res: Response) => {
         error: `Status must be one of: ${validStatuses.join(', ')}`,
       });
     }
+
+    const enteredOtp = otp ? String(otp).trim() : null;
+    const enteredQr = qrCode ? String(qrCode).trim() : null;
 
     const booking = await prisma.booking.findFirst({
       where: { id, partnerId: req.user!.id },
@@ -1101,12 +1161,62 @@ export const updateBookingStatus = async (req: Request, res: Response) => {
     });
 
     if (!booking) {
+      const sectionBooking = await (prisma as any).customSectionBooking.findUnique({
+        where: { id },
+        include: { item: true },
+      });
+      if (sectionBooking) {
+        // Validate OTP if checking in or completing
+        if ((status === 'CHECKED_IN' || status === 'COMPLETED') && sectionBooking.checkInOtp && enteredOtp) {
+          if (enteredOtp !== sectionBooking.checkInOtp && (!enteredQr || enteredQr !== sectionBooking.ticketCode)) {
+            return res.status(400).json({
+              success: false,
+              error: 'Invalid 4-digit check-in OTP. Please verify with the customer pass.',
+            });
+          }
+        }
+
+        const effectiveStatus = status === 'CHECKED_IN' ? 'CONFIRMED' : status;
+        const updatedSection = await (prisma as any).customSectionBooking.update({
+          where: { id },
+          data: {
+            status: effectiveStatus,
+            checkInStatus: status === 'CHECKED_IN' ? 'CHECKED_IN' : status === 'COMPLETED' ? 'COMPLETED' : sectionBooking.checkInStatus,
+            checkedInAt: (status === 'CHECKED_IN' || status === 'COMPLETED') ? new Date() : sectionBooking.checkedInAt,
+          },
+        });
+
+        return res.json({
+          success: true,
+          message: `Reservation ${status.toLowerCase()} successfully.`,
+          data: {
+            ...updatedSection,
+            ticketId: updatedSection.ticketCode,
+            serviceName: sectionBooking.item?.title || 'Celebration Booking',
+          },
+        });
+      }
       return res.status(404).json({ success: false, error: 'Booking not found.' });
     }
 
+    // Validate OTP for venue/partner service booking if checking in or completing
+    if ((status === 'CHECKED_IN' || status === 'COMPLETED') && (booking as any).checkInOtp && enteredOtp) {
+      if (enteredOtp !== (booking as any).checkInOtp && (!enteredQr || (enteredQr !== booking.ticketId && enteredQr !== booking.id))) {
+        return res.status(400).json({
+          success: false,
+          error: 'Invalid 4-digit check-in OTP. Please verify with the customer pass.',
+        });
+      }
+    }
+
+    const effectiveStatus = status === 'CHECKED_IN' ? 'CONFIRMED' : status;
     const updated = await prisma.booking.update({
       where: { id },
-      data: { status },
+      data: {
+        status: effectiveStatus,
+        checkInStatus: status === 'CHECKED_IN' ? 'CHECKED_IN' : status === 'COMPLETED' ? 'COMPLETED' : (booking as any).checkInStatus,
+        checkedInAt: (status === 'CHECKED_IN' || status === 'COMPLETED') ? new Date() : (booking as any).checkedInAt,
+      },
     });
 
     // Log event

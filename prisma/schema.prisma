@@ -146,6 +146,16 @@ model PartnerService {
   pricing        Float
   pricingUnit    String    @default("PER_EVENT") // PER_EVENT, PER_HOUR, PER_PLATE, PER_DAY
   capacity       Int?      // Max guests / capacity
+  minGuests      Int       @default(50)
+  maxGuests      Int       @default(500)
+  blackoutDates  String[]  @default([])
+  slotTimes      String[]  @default([])
+  advanceNoticeHours Int   @default(24)
+  autoAccept     Boolean   @default(true)
+  pricePerPlate  Float?
+  baseHallPrice  Float?
+  pricePerGuest  Float?
+  cancellationPolicy String @default("FLEXIBLE") // FLEXIBLE, MODERATE, STRICT
   images         String[]
   documents      String[]  // GST cert, trade license, etc.
   features       String[]  // e.g. ["AC Hall", "Parking", "Valet"]
@@ -243,6 +253,16 @@ model Booking {
   // Tracking
   referralCodeUsed String? // The specific QR/Link code used by the customer
   ticketId         String?   @unique // Generated Digital Ticket ID (hlc...)
+
+  // Attendance & Scheduling details
+  bookingTime      String?
+  bookingDays      Int       @default(1)
+  guestCount       Int       @default(0)
+  platesCount      Int       @default(0)
+  checkInOtp       String?   // 4-digit check-in OTP
+  checkInStatus    String    @default("PENDING") // PENDING, CHECKED_IN, COMPLETED
+  checkedInAt      DateTime?
+  lockedUntil      DateTime? // Concurrency slot lock
 
   razorpayOrderId   String?
   razorpayPaymentId String?
@@ -649,6 +669,12 @@ model CustomSectionItem {
   availableTimes String[]               @default([])
   totalSlots     Int                    @default(100)
   bookedSlots    Int                    @default(0)
+  minGuests      Int                    @default(50)
+  maxGuests      Int                    @default(1000)
+  blackoutDates  String[]               @default([])
+  pricePerPlate  Float?
+  baseHallPrice  Float?
+  pricePerGuest  Float?
   rating         Float                  @default(4.9)
   reviews        Int                    @default(0)
   tags           String[]               @default([])
@@ -673,6 +699,13 @@ model CustomSectionBooking {
   bookingDate   String             // Selected available date
   bookingTime   String?            // Selected time slot
   quantity      Int                @default(1)
+  bookingDays   Int                @default(1)
+  guestCount    Int                @default(0)
+  platesCount   Int                @default(0)
+  checkInOtp    String?            // 4-digit check-in OTP
+  checkInStatus String             @default("PENDING") // PENDING, CHECKED_IN, COMPLETED
+  checkedInAt   DateTime?
+  lockedUntil   DateTime?          // Concurrency slot lock
   itemType      String             @default("BOOKING")
   totalAmount   Float
   status        String             @default("CONFIRMED") // CONFIRMED, COMPLETED, CANCELLED

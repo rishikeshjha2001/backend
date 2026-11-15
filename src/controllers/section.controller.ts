@@ -755,6 +755,14 @@ export const bookSectionItem = async (req: Request, res: Response) => {
     });
 
     if (item && item.isActive) {
+      // Check blackout dates
+      if (item.blackoutDates && Array.isArray(item.blackoutDates) && item.blackoutDates.includes(cleanDate)) {
+        return res.status(400).json({
+          success: false,
+          error: `The celebration date ${cleanDate} is blocked or fully booked. Please select another date.`,
+        });
+      }
+
       // Check if item is a ticket with specific dates configured; regular bookings have all dates available
       if (item.itemType === 'TICKET' && Array.isArray(item.availableDates) && item.availableDates.length > 0) {
         const isDateAvailable = item.availableDates.some((d: string) => String(d).trim() === cleanDate);
@@ -833,10 +841,12 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       const prefix = item.itemType === 'TICKET' ? 'HL-TCK' : 'HL-BKG';
       const randPart = Math.floor(100000 + Math.random() * 900000);
       const ticketCode = `${prefix}-${Date.now().toString(36).toUpperCase()}-${randPart}`;
+      const checkInOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
       const paymentConfirmed = totalAmount === 0;
       const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
       const paymentStatus = paymentConfirmed ? 'PAID' : 'PENDING';
+      const lockedUntil = paymentConfirmed ? null : new Date(Date.now() + 10 * 60 * 1000);
 
       const booking = await (prisma as any).customSectionBooking.create({
         data: {
@@ -848,6 +858,12 @@ export const bookSectionItem = async (req: Request, res: Response) => {
           bookingDate: cleanDate,
           bookingTime: bookingTime ? String(bookingTime).trim() : null,
           quantity: numQty,
+          bookingDays: numDays,
+          guestCount: numGuests,
+          platesCount: numPlates,
+          checkInOtp,
+          checkInStatus: paymentConfirmed ? 'CONFIRMED' : 'PENDING',
+          lockedUntil,
           itemType: item.itemType,
           totalAmount,
           status: bookingStatus,
@@ -933,6 +949,28 @@ export const bookSectionItem = async (req: Request, res: Response) => {
     const partnerId = partnerEntity.partnerId;
     const unitPrice = isPartnerService ? partnerService.pricing : venue.price;
 
+    // Check partner rules & capacity guardrails
+    if (partnerService) {
+      if (Array.isArray(partnerService.blackoutDates) && partnerService.blackoutDates.includes(cleanDate)) {
+        return res.status(400).json({
+          success: false,
+          error: `The service date ${cleanDate} is marked as unavailable by the partner. Please choose another date.`,
+        });
+      }
+      if (partnerService.minGuests && numGuests > 0 && numGuests < partnerService.minGuests) {
+        return res.status(400).json({
+          success: false,
+          error: `Minimum ${partnerService.minGuests} guests are required for this reservation.`,
+        });
+      }
+      if (partnerService.maxGuests && numGuests > partnerService.maxGuests) {
+        return res.status(400).json({
+          success: false,
+          error: `Maximum guest capacity for this service is ${partnerService.maxGuests}.`,
+        });
+      }
+    }
+
     // Dynamic per-person / per-plate / per-day calculation formula for partner services & venues
     let baseTotal = 0;
     if (customSubtotal && Number(customSubtotal) > 0) {
@@ -1017,9 +1055,11 @@ export const bookSectionItem = async (req: Request, res: Response) => {
 
     const randPart = Math.floor(100000 + Math.random() * 900000);
     const ticketCode = `HL-BKG-${Date.now().toString(36).toUpperCase()}-${randPart}`;
+    const checkInOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const paymentConfirmed = totalAmount === 0;
     const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
     const paymentStatus = paymentConfirmed ? 'PAID' : 'PENDING';
+    const lockedUntil = paymentConfirmed ? null : new Date(Date.now() + 10 * 60 * 1000);
 
     let bookingDateObj: Date;
     try {
@@ -1029,6 +1069,22 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       }
     } catch {
       bookingDateObj = new Date();
+    }
+
+    // Double booking guardrail
+    const existingConflict = await prisma.booking.findFirst({
+      where: {
+        partnerId: partnerId,
+        date: bookingDateObj,
+        status: 'CONFIRMED',
+        ...(bookingTime ? { bookingTime: String(bookingTime).trim() } : {}),
+      },
+    });
+    if (existingConflict && (venue || isPartnerService)) {
+      return res.status(400).json({
+        success: false,
+        error: `This date (${cleanDate}) is already booked for this venue/service. Please choose another available date.`,
+      });
     }
 
     const booking = await prisma.booking.create({
@@ -1042,6 +1098,13 @@ export const bookSectionItem = async (req: Request, res: Response) => {
         totalAmount: totalAmount,
         ticketId: ticketCode,
         referralCodeUsed: isPartnerService ? partnerService!.name : venue!.name,
+        bookingTime: bookingTime ? String(bookingTime).trim() : null,
+        bookingDays: numDays,
+        guestCount: numGuests,
+        platesCount: numPlates,
+        checkInOtp,
+        checkInStatus: paymentConfirmed ? 'CONFIRMED' : 'PENDING',
+        lockedUntil,
         status: bookingStatus,
         paymentStatus: paymentStatus,
       },
