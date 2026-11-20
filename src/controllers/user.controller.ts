@@ -130,7 +130,8 @@ export const getUserBookings = async (req: Request, res: Response) => {
     const vendorBookings = await prisma.booking.findMany({
       where: { userId },
       include: { 
-        partner: { select: { businessName: true } }
+        partner: { select: { businessName: true } },
+        venue: { select: { id: true, name: true, city: true, images: true, mapUrl: true, latitude: true, longitude: true } }
       },
       orderBy: { createdAt: 'desc' }
     });

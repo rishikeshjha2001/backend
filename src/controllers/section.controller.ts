@@ -933,6 +933,22 @@ export const bookSectionItem = async (req: Request, res: Response) => {
         }).catch(() => {});
       }
 
+      // Notify Partner if assigned to this section item
+      if ((item as any).partnerId) {
+        prisma.notification.create({
+          data: {
+            title: `🎉 New Celebration Booking: ${item.title}`,
+            message: `Booking received from ${userName.trim()} (${userPhone.trim()}) for ${cleanDate}. Total: ₹${totalAmount}`,
+            targetRole: 'PARTNER',
+            type: 'IN_APP',
+          },
+        }).then(async (notif: any) => {
+          await prisma.partnerNotification.create({
+            data: { partnerId: (item as any).partnerId, notificationId: notif.id },
+          }).catch(() => {});
+        }).catch(() => {});
+      }
+
       // Notify Admin
       prisma.notification.create({
         data: {

@@ -325,7 +325,71 @@ export const getPartnerBookings = async (req: Request, res: Response) => {
       },
       orderBy: { createdAt: 'desc' },
     });
-    res.status(200).json({ success: true, data: bookings });
+
+    let sectionBookings: any[] = [];
+    try {
+      if ((prisma as any).customSectionBooking) {
+        sectionBookings = await (prisma as any).customSectionBooking.findMany({
+          where: { partnerId },
+          include: {
+            item: {
+              select: {
+                id: true,
+                title: true,
+                location: true,
+                image: true,
+                itemType: true,
+                price: true,
+                badge: true,
+                partnerId: true,
+              },
+            },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+      }
+    } catch (sbErr) {
+      console.warn('Section bookings query warning:', sbErr);
+    }
+
+    const formattedSectionBookings = sectionBookings.map((sb) => ({
+      id: sb.id,
+      ticketId: sb.ticketCode,
+      user: {
+        name: sb.userName,
+        phone: sb.userPhone,
+        email: sb.userEmail,
+      },
+      venue: {
+        name: sb.item?.title || 'Celebration Service',
+        address: sb.item?.location || 'Direct Venue Access',
+      },
+      serviceName: sb.item?.title || 'Celebration Service',
+      serviceType: sb.item?.itemType || 'SERVICE',
+      guestCount: sb.guestCount || sb.quantity || 1,
+      platesCount: sb.platesCount || 0,
+      vegPlatesCount: sb.vegPlatesCount || 0,
+      nonVegPlatesCount: sb.nonVegPlatesCount || 0,
+      celebrationType: sb.celebrationType || 'Celebration',
+      bookingDays: sb.bookingDays || 1,
+      date: sb.bookingDate,
+      bookingDate: sb.bookingDate,
+      bookingTime: sb.bookingTime,
+      totalAmount: sb.totalAmount,
+      status: sb.status || 'CONFIRMED',
+      paymentStatus: sb.paymentStatus || 'PAID',
+      checkInStatus: sb.checkInStatus || 'PENDING',
+      checkInOtp: sb.checkInOtp,
+      completionOtp: sb.completionOtp,
+      createdAt: sb.createdAt,
+      source: 'SECTION_BOOKING',
+    }));
+
+    const combinedBookings = [...bookings, ...formattedSectionBookings].sort(
+      (a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+    );
+
+    res.status(200).json({ success: true, data: combinedBookings });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });
   }
@@ -349,8 +413,55 @@ export const updateBookingStatus = async (req: Request, res: Response) => {
 
     const updated = await prisma.booking.update({
       where: { id },
-      data: { status },
+      data: {
+        status,
+        checkInStatus: status === 'CHECKED_IN' ? 'CHECKED_IN' : status === 'COMPLETED' ? 'COMPLETED' : (booking as any).checkInStatus,
+        checkedInAt: (status === 'CHECKED_IN' || status === 'COMPLETED') ? new Date() : (booking as any).checkedInAt,
+      },
     });
+
+    // Log booking event
+    await prisma.bookingEvent.create({
+      data: {
+        bookingId: updated.id,
+        eventType: status === 'CONFIRMED' ? 'CONFIRMED' : status === 'CHECKED_IN' ? 'CHECKED_IN' : status === 'COMPLETED' ? 'COMPLETED' : 'CANCELLED',
+        description: `Booking status updated to ${status}`,
+      },
+    }).catch(() => {});
+
+    // Notify customer
+    if (booking.userId) {
+      const notifTitle =
+        status === 'CONFIRMED'
+          ? '🎉 Booking Confirmed!'
+          : status === 'CHECKED_IN'
+          ? '✅ Guest Arrival Checked In'
+          : status === 'COMPLETED'
+          ? '✨ Celebration Service Completed'
+          : '⚠️ Booking Cancelled';
+      const notifMsg =
+        status === 'CONFIRMED'
+          ? `Your booking has been accepted and confirmed. Ticket ID: ${booking.ticketId || booking.id}.`
+          : status === 'CHECKED_IN'
+          ? `Your arrival has been verified. Check-in confirmed!`
+          : status === 'COMPLETED'
+          ? `Your celebration service was successfully completed. Thank you for choosing HappyLokam!`
+          : `Your booking was cancelled. Any eligible refund will be credited to your wallet.`;
+
+      prisma.notification.create({
+        data: {
+          title: notifTitle,
+          message: notifMsg,
+          targetRole: 'USER',
+          type: 'BOOKING',
+        },
+      }).then(async (notif: any) => {
+        await prisma.userNotification.create({
+          data: { userId: booking.userId, notificationId: notif.id, isRead: false },
+        }).catch(() => {});
+      }).catch(() => {});
+    }
+
     res.status(200).json({ success: true, data: updated });
   } catch (error: any) {
     res.status(500).json({ success: false, error: error.message });

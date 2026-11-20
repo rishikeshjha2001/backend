@@ -636,14 +636,63 @@ export const initiateRefund = async (req: Request, res: Response) => {
       return res.status(404).json({ success: false, error: 'Payment not found' });
     }
 
+    const refundAmount = parseFloat(amount);
     const refund = await prisma.refund.create({
       data: {
         paymentId: id,
-        amount: parseFloat(amount),
+        amount: refundAmount,
         reason: reason || 'Customer requested refund',
         status: 'PROCESSED',
       },
     });
+
+    await prisma.payment.update({
+      where: { id },
+      data: { status: 'REFUNDED' },
+    });
+
+    if (payment.bookingId) {
+      const booking = await prisma.booking.findUnique({
+        where: { id: payment.bookingId },
+        select: { id: true, userId: true, ticketId: true, status: true },
+      });
+
+      if (booking) {
+        await prisma.booking.update({
+          where: { id: booking.id },
+          data: { status: 'CANCELLED', paymentStatus: 'REFUNDED' },
+        }).catch(() => {});
+
+        if (booking.userId) {
+          // Credit user wallet with the refunded amount
+          await prisma.user.update({
+            where: { id: booking.userId },
+            data: { walletBalance: { increment: refundAmount } },
+          }).catch(() => {});
+
+          prisma.notification.create({
+            data: {
+              title: '💰 Refund Credited to Wallet',
+              message: `A refund of ₹${refundAmount.toFixed(2)} for reservation #${booking.ticketId || booking.id} has been credited to your HappyLokam wallet.`,
+              targetRole: 'USER',
+              type: 'REFUND',
+            },
+          }).then(async (notif: any) => {
+            await prisma.userNotification.create({
+              data: { userId: booking.userId, notificationId: notif.id, isRead: false },
+            }).catch(() => {});
+          }).catch(() => {});
+        }
+      }
+    }
+
+    logAdminActivity(
+      'REFUND_INITIATED',
+      `Refund Processed: ₹${refundAmount}`,
+      `Admin initiated refund of ₹${refundAmount} for payment ${id}. Reason: ${reason || 'Customer requested refund'}`,
+      { paymentId: id, amount: refundAmount, reason },
+      'INFO'
+    ).catch(() => {});
 
     res.status(200).json({ success: true, message: 'Refund initiated successfully', refund });
   } catch (error: any) {

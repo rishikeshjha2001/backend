@@ -1226,6 +1226,48 @@ export const updateBookingStatus = async (req: Request, res: Response) => {
           },
         });
 
+        // Notify Customer of Status Change on Custom Section Booking
+        if (sectionBooking.userId) {
+          const notifTitle =
+            status === 'CONFIRMED'
+              ? '🎉 Celebration Booking Confirmed!'
+              : status === 'CHECKED_IN'
+              ? '✅ Guest Arrival Checked In'
+              : status === 'COMPLETED'
+              ? '✨ Celebration Service Completed'
+              : '⚠️ Booking Cancelled by Partner';
+          const notifMsg =
+            status === 'CONFIRMED'
+              ? `Your booking for "${sectionBooking.item?.title || 'Celebration'}" has been accepted and confirmed. Ticket ID: ${sectionBooking.ticketCode}.`
+              : status === 'CHECKED_IN'
+              ? `Your arrival has been verified for "${sectionBooking.item?.title || 'Celebration'}". Check-in confirmed!`
+              : status === 'COMPLETED'
+              ? `Your celebration service for "${sectionBooking.item?.title || 'Celebration'}" was successfully completed. Thank you for choosing HappyLokam!`
+              : `Your booking for "${sectionBooking.item?.title || 'Celebration'}" was cancelled by the partner. Any eligible refund will be credited to your wallet.`;
+
+          prisma.notification.create({
+            data: {
+              title: notifTitle,
+              message: notifMsg,
+              targetRole: 'USER',
+              type: 'BOOKING',
+            },
+          }).then(async (notif: any) => {
+            await prisma.userNotification.create({
+              data: { userId: sectionBooking.userId, notificationId: notif.id, isRead: false },
+            }).catch(() => {});
+          }).catch(() => {});
+        }
+
+        // Universal Admin Activity Alert
+        logAdminActivity(
+          'PARTNER_SECTION_BOOKING_UPDATE',
+          `Partner Updated Section Booking: ${status}`,
+          `Partner marked celebration booking #${sectionBooking.ticketCode} for ${sectionBooking.userName} as ${status}. Total: ₹${sectionBooking.totalAmount}`,
+          { bookingId: updatedSection.id, partnerId: req.user!.id, status, totalAmount: sectionBooking.totalAmount },
+          status === 'CANCELLED' ? 'WARNING' : 'INFO'
+        ).catch(() => {});
+
         return res.json({
           success: true,
           message: `Reservation ${status.toLowerCase()} successfully.`,
@@ -1269,11 +1311,11 @@ export const updateBookingStatus = async (req: Request, res: Response) => {
       },
     });
 
-    // Log event
+    // Log event with proper event type
     await prisma.bookingEvent.create({
       data: {
         bookingId: updated.id,
-        eventType: status === 'CONFIRMED' ? 'CONFIRMED' : status === 'COMPLETED' ? 'CONFIRMED' : 'CANCELLED',
+        eventType: status === 'CONFIRMED' ? 'CONFIRMED' : status === 'CHECKED_IN' ? 'CHECKED_IN' : status === 'COMPLETED' ? 'COMPLETED' : 'CANCELLED',
         description: `Partner updated status to ${status}`,
       },
     }).catch(() => {});
@@ -1283,12 +1325,16 @@ export const updateBookingStatus = async (req: Request, res: Response) => {
       const notifTitle =
         status === 'CONFIRMED'
           ? '🎉 Booking Confirmed by Partner!'
+          : status === 'CHECKED_IN'
+          ? '✅ Guest Arrival Checked In'
           : status === 'COMPLETED'
           ? '✨ Celebration Service Completed'
           : '⚠️ Booking Cancelled by Partner';
       const notifMsg =
         status === 'CONFIRMED'
           ? `Your booking for "${booking.venue?.name || 'Celebration'}" has been accepted and confirmed by ${booking.partner?.businessName || 'the partner'}. Ticket ID: ${booking.ticketId || booking.id}.`
+          : status === 'CHECKED_IN'
+          ? `Your arrival has been verified at "${booking.venue?.name || 'the venue'}". Check-in confirmed!`
           : status === 'COMPLETED'
           ? `Your celebration service with ${booking.partner?.businessName || 'the partner'} was successfully completed. Thank you for choosing HappyLokam!`
           : `Your booking for "${booking.venue?.name || 'Celebration'}" was cancelled by the partner. Any eligible refund will be credited to your wallet.`;
@@ -1389,6 +1435,65 @@ export const getPartnerDashboard = async (req: Request, res: Response) => {
       take: 5,
     });
 
+    let sectionTotal = 0;
+    let sectionPending = 0;
+    let sectionCompleted = 0;
+    let sectionCancelled = 0;
+    let sectionRevenue = 0;
+    let sectionMonthlyRevenue = 0;
+    let recentSectionBookings: any[] = [];
+
+    try {
+      if ((prisma as any).customSectionBooking) {
+        const [sTotal, sPending, sCompleted, sCancelled, sRev, sMonthRev, sRecent] = await Promise.all([
+          (prisma as any).customSectionBooking.count({ where: { partnerId } }),
+          (prisma as any).customSectionBooking.count({ where: { partnerId, status: 'PENDING' } }),
+          (prisma as any).customSectionBooking.count({ where: { partnerId, status: 'COMPLETED' } }),
+          (prisma as any).customSectionBooking.count({ where: { partnerId, status: 'CANCELLED' } }),
+          (prisma as any).customSectionBooking.aggregate({
+            where: { partnerId, status: { in: ['CONFIRMED', 'COMPLETED'] } },
+            _sum: { totalAmount: true },
+          }),
+          (prisma as any).customSectionBooking.aggregate({
+            where: {
+              partnerId,
+              status: { in: ['CONFIRMED', 'COMPLETED'] },
+              createdAt: { gte: firstDayOfMonth },
+            },
+            _sum: { totalAmount: true },
+          }),
+          (prisma as any).customSectionBooking.findMany({
+            where: { partnerId },
+            include: { item: { select: { title: true } } },
+            orderBy: { createdAt: 'desc' },
+            take: 5,
+          }),
+        ]);
+
+        sectionTotal = sTotal;
+        sectionPending = sPending;
+        sectionCompleted = sCompleted;
+        sectionCancelled = sCancelled;
+        sectionRevenue = sRev._sum?.totalAmount || 0;
+        sectionMonthlyRevenue = sMonthRev._sum?.totalAmount || 0;
+        recentSectionBookings = sRecent.map((sb: any) => ({
+          id: sb.id,
+          ticketId: sb.ticketCode,
+          user: { name: sb.userName, phone: sb.userPhone },
+          serviceName: sb.item?.title || 'Celebration Booking',
+          totalAmount: sb.totalAmount,
+          status: sb.status,
+          createdAt: sb.createdAt,
+        }));
+      }
+    } catch (e) {
+      console.warn('Dashboard section aggregate warning:', e);
+    }
+
+    const combinedRecentBookings = [...recentBookings, ...recentSectionBookings]
+      .sort((a: any, b: any) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, 5);
+
     return res.json({
       success: true,
       data: {
@@ -1403,16 +1508,16 @@ export const getPartnerDashboard = async (req: Request, res: Response) => {
           memberSince: partner.createdAt,
         },
         stats: {
-          totalBookings,
-          pendingBookings,
-          completedBookings,
-          cancelledBookings,
+          totalBookings: totalBookings + sectionTotal,
+          pendingBookings: pendingBookings + sectionPending,
+          completedBookings: completedBookings + sectionCompleted,
+          cancelledBookings: cancelledBookings + sectionCancelled,
           totalServices,
           activeServices,
-          totalRevenue: revenueData._sum.totalAmount || 0,
-          monthlyRevenue: monthlyRevenue._sum.totalAmount || 0,
+          totalRevenue: (revenueData._sum.totalAmount || 0) + sectionRevenue,
+          monthlyRevenue: (monthlyRevenue._sum.totalAmount || 0) + sectionMonthlyRevenue,
         },
-        recentBookings,
+        recentBookings: combinedRecentBookings,
       },
     });
   } catch (error: any) {

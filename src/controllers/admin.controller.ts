@@ -1021,12 +1021,14 @@ export const updateAdminBookingStatus = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'Status is required.' });
     }
 
+    const effectiveStatus = String(status);
+
     // Check if it's an EventBooking first
     const eventBooking = await prisma.eventBooking.findUnique({ where: { id: id as string } });
     if (eventBooking) {
       const updated = await prisma.eventBooking.update({
         where: { id: id as string },
-        data: { status: String(status) }
+        data: { status: effectiveStatus }
       });
       return res.status(200).json({ success: true, data: updated, message: 'Event pass booking updated successfully.' });
     }
@@ -1036,9 +1038,62 @@ export const updateAdminBookingStatus = async (req: Request, res: Response) => {
     if (booking) {
       const updated = await prisma.booking.update({
         where: { id: id as string },
-        data: { status: String(status) }
+        data: {
+          status: effectiveStatus,
+          checkInStatus: effectiveStatus === 'CHECKED_IN' ? 'CHECKED_IN' : effectiveStatus === 'COMPLETED' ? 'COMPLETED' : (booking as any).checkInStatus,
+          checkedInAt: (effectiveStatus === 'CHECKED_IN' || effectiveStatus === 'COMPLETED') ? new Date() : (booking as any).checkedInAt,
+        }
       });
+
+      // Notify customer if exists
+      if (booking.userId) {
+        prisma.notification.create({
+          data: {
+            title: `Reservation Updated: ${effectiveStatus}`,
+            message: `Your reservation #${booking.ticketId || booking.id} has been updated to ${effectiveStatus} by HappyLokam Support.`,
+            targetRole: 'USER',
+            type: 'BOOKING',
+          },
+        }).then(async (notif: any) => {
+          await prisma.userNotification.create({
+            data: { userId: booking.userId, notificationId: notif.id, isRead: false },
+          }).catch(() => {});
+        }).catch(() => {});
+      }
+
       return res.status(200).json({ success: true, data: updated, message: 'Venue booking updated successfully.' });
+    }
+
+    // Check if it's a CustomSectionBooking
+    if ((prisma as any).customSectionBooking) {
+      const sectionBooking = await (prisma as any).customSectionBooking.findUnique({ where: { id: id as string } });
+      if (sectionBooking) {
+        const updated = await (prisma as any).customSectionBooking.update({
+          where: { id: id as string },
+          data: {
+            status: effectiveStatus,
+            checkInStatus: effectiveStatus === 'CHECKED_IN' ? 'CHECKED_IN' : effectiveStatus === 'COMPLETED' ? 'COMPLETED' : sectionBooking.checkInStatus,
+            checkedInAt: (effectiveStatus === 'CHECKED_IN' || effectiveStatus === 'COMPLETED') ? new Date() : sectionBooking.checkedInAt,
+          }
+        });
+
+        if (sectionBooking.userId) {
+          prisma.notification.create({
+            data: {
+              title: `Celebration Booking Updated: ${effectiveStatus}`,
+              message: `Your booking #${sectionBooking.ticketCode} has been updated to ${effectiveStatus} by HappyLokam Support.`,
+              targetRole: 'USER',
+              type: 'BOOKING',
+            },
+          }).then(async (notif: any) => {
+            await prisma.userNotification.create({
+              data: { userId: sectionBooking.userId, notificationId: notif.id, isRead: false },
+            }).catch(() => {});
+          }).catch(() => {});
+        }
+
+        return res.status(200).json({ success: true, data: updated, message: 'Section booking updated successfully.' });
+      }
     }
 
     return res.status(404).json({ success: false, error: 'Booking record not found.' });
@@ -1065,6 +1120,15 @@ export const deleteAdminBooking = async (req: Request, res: Response) => {
       await prisma.payment.deleteMany({ where: { bookingId: id as string } }).catch(() => {});
       await prisma.booking.delete({ where: { id: id as string } });
       return res.status(200).json({ success: true, message: 'Booking record deleted successfully.' });
+    }
+
+    // Check if it's a CustomSectionBooking
+    if ((prisma as any).customSectionBooking) {
+      const sectionBooking = await (prisma as any).customSectionBooking.findUnique({ where: { id: id as string } });
+      if (sectionBooking) {
+        await (prisma as any).customSectionBooking.delete({ where: { id: id as string } });
+        return res.status(200).json({ success: true, message: 'Custom section booking record deleted successfully.' });
+      }
     }
 
     return res.status(404).json({ success: false, error: 'Booking record not found.' });
