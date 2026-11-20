@@ -17,7 +17,7 @@ export const createPackage = async (req: Request, res: Response) => {
         duration: duration ? String(duration).trim() : 'Full Day',
         price: parseFloat(price) || 0,
         description: description ? String(description).trim() : '',
-        imageUrl: imageUrl || 'https://images.unsplash.com/photo-1590073242678-70ee3fc28e8e?auto=format&fit=crop&w=1200&q=80',
+        imageUrl: imageUrl ? String(imageUrl).trim() : '',
         status: status || 'Active'
       }
     });

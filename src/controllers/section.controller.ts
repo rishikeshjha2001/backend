@@ -595,7 +595,7 @@ export const createSectionItem = async (req: Request, res: Response) => {
         bookedSlots: 0,
         rating: 4.9,
         reviews: 0,
-        image: image?.trim() || 'https://images.unsplash.com/photo-1519741497674-611481863552?auto=format&fit=crop&w=800&q=80',
+        image: image?.trim() || '',
         tags: tagArr,
         description: description?.trim() || null,
         isActive: true,
