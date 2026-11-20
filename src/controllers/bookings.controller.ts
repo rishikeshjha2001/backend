@@ -144,6 +144,8 @@ export const createBooking = async (req: Request, res: Response) => {
     const timeStr = dateObj.toTimeString().split(' ')[0].replace(/:/g, '');
     const random2Digit = Math.floor(10 + Math.random() * 90);
     const ticketId = `hlc${dateStr}${timeStr}${random2Digit}`;
+    const checkInOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    const completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
     const newBooking = await prisma.booking.create({
       data: {
@@ -158,6 +160,15 @@ export const createBooking = async (req: Request, res: Response) => {
         totalAmount: finalTotalAmount,
         referralCodeUsed: validatedReferralCode,
         ticketId,
+        bookingTime: req.body.bookingTime ? String(req.body.bookingTime).trim() : null,
+        bookingDays: req.body.bookingDays ? Math.max(1, parseInt(String(req.body.bookingDays))) : 1,
+        guestCount: Number(guestCount || guestsCount || quantity || 0),
+        platesCount: Number(platesCount || 0),
+        vegPlatesCount: Number(req.body.vegPlatesCount || 0),
+        nonVegPlatesCount: Number(req.body.nonVegPlatesCount || 0),
+        celebrationType: req.body.celebrationType ? String(req.body.celebrationType).trim() : null,
+        checkInOtp,
+        completionOtp,
         status: 'PENDING',
         paymentStatus: 'PENDING',
       },

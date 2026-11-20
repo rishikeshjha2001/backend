@@ -161,6 +161,14 @@ model PartnerService {
   features       String[]  // e.g. ["AC Hall", "Parking", "Valet"]
   location       String
   city           String
+  mapUrl         String?
+  latitude       Float?
+  longitude      Float?
+  supportedCelebrations String[] @default([])
+  celebrationPricing    Json?
+  amenitiesPolicy       Json?
+  addOnServices         Json?
+  packages              Json?
   availability   String    @default("AVAILABLE") // AVAILABLE, BOOKED, UNAVAILABLE
   status         String    @default("PENDING_REVIEW") // PENDING_REVIEW, APPROVED, REJECTED, SUSPENDED
   adminRemarks   String?
@@ -259,7 +267,11 @@ model Booking {
   bookingDays      Int       @default(1)
   guestCount       Int       @default(0)
   platesCount      Int       @default(0)
+  vegPlatesCount   Int       @default(0)
+  nonVegPlatesCount Int      @default(0)
+  celebrationType  String?
   checkInOtp       String?   // 4-digit check-in OTP
+  completionOtp    String?   // 4-digit completion OTP
   checkInStatus    String    @default("PENDING") // PENDING, CHECKED_IN, COMPLETED
   checkedInAt      DateTime?
   lockedUntil      DateTime? // Concurrency slot lock
@@ -378,6 +390,14 @@ model Venue {
   city        String
   price       Float
   images      String[]
+  mapUrl      String?
+  latitude    Float?
+  longitude   Float?
+  supportedCelebrations String[] @default([])
+  celebrationPricing    Json?
+  amenitiesPolicy       Json?
+  addOnServices         Json?
+  packages              Json?
   status      String   @default("Active")
   createdAt   DateTime @default(now())
   bookings    Booking[]
@@ -675,6 +695,15 @@ model CustomSectionItem {
   pricePerPlate  Float?
   baseHallPrice  Float?
   pricePerGuest  Float?
+  mapUrl         String?
+  latitude       Float?
+  longitude      Float?
+  supportedCelebrations String[] @default([])
+  celebrationPricing    Json?
+  amenitiesPolicy       Json?
+  addOnServices         Json?
+  packages              Json?
+  partnerId      String?
   rating         Float                  @default(4.9)
   reviews        Int                    @default(0)
   tags           String[]               @default([])
@@ -702,7 +731,12 @@ model CustomSectionBooking {
   bookingDays   Int                @default(1)
   guestCount    Int                @default(0)
   platesCount   Int                @default(0)
+  vegPlatesCount Int               @default(0)
+  nonVegPlatesCount Int            @default(0)
+  celebrationType String?
+  partnerId     String?
   checkInOtp    String?            // 4-digit check-in OTP
+  completionOtp String?            // 4-digit completion OTP
   checkInStatus String             @default("PENDING") // PENDING, CHECKED_IN, COMPLETED
   checkedInAt   DateTime?
   lockedUntil   DateTime?          // Concurrency slot lock

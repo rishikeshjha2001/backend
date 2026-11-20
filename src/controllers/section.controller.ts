@@ -427,6 +427,17 @@ export const getSectionItemById = async (req: Request, res: Response) => {
         rating: partnerService.rating || 4.9,
         reviews: partnerService.totalBookings || 12,
         partnerId: partnerService.partnerId,
+        supportedCelebrations: partnerService.supportedCelebrations || [],
+        celebrationPricing: partnerService.celebrationPricing || null,
+        amenitiesPolicy: partnerService.amenitiesPolicy || null,
+        addOnServices: partnerService.addOnServices || [],
+        packages: partnerService.packages || [],
+        mapUrl: partnerService.mapUrl || null,
+        latitude: partnerService.latitude || null,
+        longitude: partnerService.longitude || null,
+        baseHallPrice: partnerService.baseHallPrice || null,
+        pricePerPlate: partnerService.pricePerPlate || null,
+        pricePerGuest: partnerService.pricePerGuest || null,
         isActive: true,
       };
       return res.status(200).json({
@@ -464,6 +475,14 @@ export const getSectionItemById = async (req: Request, res: Response) => {
         rating: 4.9,
         reviews: 24,
         partnerId: venue.partnerId,
+        supportedCelebrations: (venue as any).supportedCelebrations || [],
+        celebrationPricing: (venue as any).celebrationPricing || null,
+        amenitiesPolicy: (venue as any).amenitiesPolicy || null,
+        addOnServices: (venue as any).addOnServices || [],
+        packages: (venue as any).packages || [],
+        mapUrl: (venue as any).mapUrl || null,
+        latitude: (venue as any).latitude || null,
+        longitude: (venue as any).longitude || null,
         isActive: true,
       };
       return res.status(200).json({
@@ -842,6 +861,7 @@ export const bookSectionItem = async (req: Request, res: Response) => {
       const randPart = Math.floor(100000 + Math.random() * 900000);
       const ticketCode = `${prefix}-${Date.now().toString(36).toUpperCase()}-${randPart}`;
       const checkInOtp = Math.floor(1000 + Math.random() * 9000).toString();
+      const completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
 
       const paymentConfirmed = totalAmount === 0;
       const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
@@ -852,6 +872,7 @@ export const bookSectionItem = async (req: Request, res: Response) => {
         data: {
           itemId,
           userId,
+          partnerId: (item as any).partnerId || null,
           userName: userName.trim(),
           userPhone: userPhone.trim(),
           userEmail: userEmail?.trim() || null,
@@ -861,7 +882,11 @@ export const bookSectionItem = async (req: Request, res: Response) => {
           bookingDays: numDays,
           guestCount: numGuests,
           platesCount: numPlates,
+          vegPlatesCount: Number(req.body.vegPlatesCount || 0),
+          nonVegPlatesCount: Number(req.body.nonVegPlatesCount || 0),
+          celebrationType: req.body.celebrationType ? String(req.body.celebrationType).trim() : null,
           checkInOtp,
+          completionOtp,
           checkInStatus: paymentConfirmed ? 'CONFIRMED' : 'PENDING',
           lockedUntil,
           itemType: item.itemType,
@@ -1056,6 +1081,7 @@ export const bookSectionItem = async (req: Request, res: Response) => {
     const randPart = Math.floor(100000 + Math.random() * 900000);
     const ticketCode = `HL-BKG-${Date.now().toString(36).toUpperCase()}-${randPart}`;
     const checkInOtp = Math.floor(1000 + Math.random() * 9000).toString();
+    const completionOtp = Math.floor(1000 + Math.random() * 9000).toString();
     const paymentConfirmed = totalAmount === 0;
     const bookingStatus = paymentConfirmed ? 'CONFIRMED' : 'PENDING';
     const paymentStatus = paymentConfirmed ? 'PAID' : 'PENDING';
@@ -1102,7 +1128,11 @@ export const bookSectionItem = async (req: Request, res: Response) => {
         bookingDays: numDays,
         guestCount: numGuests,
         platesCount: numPlates,
+        vegPlatesCount: Number(req.body.vegPlatesCount || 0),
+        nonVegPlatesCount: Number(req.body.nonVegPlatesCount || 0),
+        celebrationType: req.body.celebrationType ? String(req.body.celebrationType).trim() : null,
         checkInOtp,
+        completionOtp,
         checkInStatus: paymentConfirmed ? 'CONFIRMED' : 'PENDING',
         lockedUntil,
         status: bookingStatus,
