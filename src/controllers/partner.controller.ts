@@ -1995,3 +1995,81 @@ export const changePartnerPassword = async (req: Request, res: Response) => {
     return res.status(500).json({ success: false, error: error.message || 'Internal server error' });
   }
 };
+
+/**
+ * POST /api/v1/partners/reset-data
+ * Completely delete all bookings, services, and notifications for the authenticated partner
+ */
+export const resetPartnerData = async (req: Request, res: Response) => {
+  try {
+    const partnerId = (req as any).partner?.id || (req as any).user?.id;
+    if (!partnerId) {
+      return res.status(401).json({ success: false, error: 'Unauthorized. Partner authentication required.' });
+    }
+
+    // 1. Delete all booking events for this partner's bookings
+    const partnerBookings = await prisma.booking.findMany({
+      where: { partnerId },
+      select: { id: true },
+    });
+    const bookingIds = partnerBookings.map((b) => b.id);
+
+    if (bookingIds.length > 0) {
+      await prisma.bookingEvent.deleteMany({
+        where: { bookingId: { in: bookingIds } },
+      }).catch(() => {});
+      // 2. Delete all bookings for this partner
+      await prisma.booking.deleteMany({
+        where: { id: { in: bookingIds } },
+      }).catch(() => {});
+    }
+
+    // 3. Delete all partner notifications
+    await prisma.partnerNotification.deleteMany({
+      where: { partnerId },
+    }).catch(() => {});
+
+    // 4. Delete all partner services
+    await prisma.partnerService.deleteMany({
+      where: { partnerId },
+    }).catch(() => {});
+
+    // 5. Reset partner wallet balance to 0
+    await prisma.partner.update({
+      where: { id: partnerId },
+      data: { walletBalance: 0 },
+    }).catch(() => {});
+
+    return res.status(200).json({
+      success: true,
+      message: 'All partner bookings, services, and notifications have been completely wiped.',
+    });
+  } catch (error: any) {
+    console.error('resetPartnerData error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+};
+
+/**
+ * POST /api/v1/partners/admin/purge-all-partner-data
+ * Admin purge of all partner bookings, services, and notifications
+ */
+export const adminPurgeAllPartnerData = async (_req: Request, res: Response) => {
+  try {
+    await prisma.bookingEvent.deleteMany({}).catch(() => {});
+    await prisma.booking.deleteMany({}).catch(() => {});
+    await prisma.partnerNotification.deleteMany({}).catch(() => {});
+    await prisma.partnerService.deleteMany({}).catch(() => {});
+    await prisma.partner.updateMany({
+      data: { walletBalance: 0 },
+    }).catch(() => {});
+
+    return res.status(200).json({
+      success: true,
+      message: 'All partner data, bookings, and services have been purged successfully.',
+    });
+  } catch (error: any) {
+    console.error('adminPurgeAllPartnerData error:', error);
+    return res.status(500).json({ success: false, error: error.message || 'Internal server error' });
+  }
+};

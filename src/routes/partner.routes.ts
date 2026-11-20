@@ -33,6 +33,8 @@ import {
   verifyServerCharge,
   getPartnerSubscriptionConfig,
   changePartnerPassword,
+  resetPartnerData,
+  adminPurgeAllPartnerData,
 } from '../controllers/partner.controller';
 
 const router = Router();
@@ -98,11 +100,16 @@ router.put('/bookings/:id/status', requirePartner, updateBookingStatus);
 router.get('/notifications', requirePartner, getPartnerNotifications);
 router.put('/notifications/:id/read', requirePartner, markNotificationRead);
 
+// Partner Self Data Reset
+router.post('/reset-data', requirePartner, resetPartnerData);
+router.delete('/clean-all', requirePartner, resetPartnerData);
+
 // ==========================================
 // ADMIN PARTNER MANAGEMENT ROUTES
 // ==========================================
 router.get('/admin/list', requireAdmin, adminListPartners);
 router.get('/admin/services', requireAdmin, getAllPartnerServicesAdmin);
+router.post('/admin/purge-all-data', requireAdmin, adminPurgeAllPartnerData);
 router.put('/admin/:id/approve', requireAdmin, adminApprovePartner);
 router.put('/admin/:id/reject', requireAdmin, adminRejectPartner);
 router.put('/admin/:id/suspend', requireAdmin, adminSuspendPartner);

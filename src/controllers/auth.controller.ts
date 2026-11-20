@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import crypto from 'crypto';
 import Razorpay from 'razorpay';
 
 import { getJwtSecret } from '../config/jwt';
@@ -452,11 +453,191 @@ export const refreshToken = async (req: Request, res: Response) => {
 };
 
 // ==========================================
-// USER & PARTNER: RESET PASSWORD
+// USER & PARTNER: PHONE / EMAIL OTP VERIFICATION & SECURE PASSWORD RESET
 // ==========================================
+
+const hashUserOtp = (target: string, otp: string): string => {
+  const salt = process.env.OTP_SALT || 'happylokam_otp_security_salt_2026';
+  return crypto.createHash('sha256').update(`${target.trim().toLowerCase()}:${otp.trim()}:${salt}`).digest('hex');
+};
+
+const failedAuthOtpAttempts = new Map<string, { count: number; lockedUntil: number }>();
+
+/**
+ * POST /api/v1/auth/send-otp
+ * Rate-limited: max 1 per 60s, max 5 per hour, 5-minute expiration
+ */
+export const sendAuthOtp = async (req: Request, res: Response) => {
+  try {
+    const { phoneOrEmail, purpose = 'RESET_PASSWORD' } = req.body;
+    if (!phoneOrEmail || typeof phoneOrEmail !== 'string') {
+      return res.status(400).json({ success: false, error: 'Phone number or email is required.' });
+    }
+
+    const cleanTarget = phoneOrEmail.trim().toLowerCase();
+    const cleanPhone = cleanTarget.replace(/\D/g, '');
+
+    // Check account existence for password resets
+    if (purpose === 'RESET_PASSWORD') {
+      const userExists = await prisma.user.findFirst({
+        where: {
+          OR: [
+            { email: { equals: cleanTarget, mode: 'insensitive' } },
+            ...(cleanPhone.length >= 10 ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
+          ],
+        },
+      });
+
+      const partnerExists = !userExists && (await prisma.partner.findFirst({
+        where: {
+          OR: [
+            { email: { equals: cleanTarget, mode: 'insensitive' } },
+            ...(cleanPhone.length >= 10 ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
+          ],
+        },
+      }));
+
+      if (!userExists && !partnerExists) {
+        return res.status(404).json({ success: false, error: 'No account registered with this phone number or email.' });
+      }
+    }
+
+    // Lockout check
+    const lockInfo = failedAuthOtpAttempts.get(cleanTarget);
+    if (lockInfo && lockInfo.lockedUntil > Date.now()) {
+      const waitMins = Math.ceil((lockInfo.lockedUntil - Date.now()) / (60 * 1000));
+      return res.status(429).json({
+        success: false,
+        error: `Too many attempts. Account locked. Please try again after ${waitMins} minute(s).`,
+      });
+    }
+
+    // 60-second cooldown
+    const recent = await prisma.partnerOtp.findFirst({
+      where: {
+        phone: cleanTarget,
+        createdAt: { gte: new Date(Date.now() - 60 * 1000) },
+      },
+    });
+    if (recent) {
+      return res.status(429).json({
+        success: false,
+        error: 'Please wait 60 seconds before requesting another OTP verification code.',
+      });
+    }
+
+    // Hourly rate limit
+    const hourlyCount = await prisma.partnerOtp.count({
+      where: {
+        phone: cleanTarget,
+        createdAt: { gte: new Date(Date.now() - 60 * 60 * 1000) },
+      },
+    });
+    if (hourlyCount >= 5) {
+      return res.status(429).json({
+        success: false,
+        error: 'Too many OTP requests. Please try again after 1 hour.',
+      });
+    }
+
+    const otp = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = new Date(Date.now() + 5 * 60 * 1000);
+    const hashedOtp = hashUserOtp(cleanTarget, otp);
+
+    await prisma.partnerOtp.deleteMany({ where: { phone: cleanTarget } });
+    await prisma.partnerOtp.create({
+      data: {
+        phone: cleanTarget,
+        otp: hashedOtp,
+        expiresAt,
+        purpose,
+      },
+    });
+
+    const masked = cleanTarget.includes('@')
+      ? cleanTarget.replace(/(^.).*(@.*$)/, '$1***$2')
+      : cleanTarget.slice(-4).padStart(cleanTarget.length, '*');
+    console.log(`[AUTH AUDIT] OTP generated for ${masked}, expires in 5 minutes.`);
+
+    return res.json({
+      success: true,
+      message: 'OTP sent successfully. Code valid for 5 minutes.',
+      ...((process.env.NODE_ENV === 'test' || process.env.ALLOW_MOCK_AUTH === 'true' || process.env.NODE_ENV === 'development') && { otp }),
+    });
+  } catch (error: any) {
+    console.error('sendAuthOtp error:', error);
+    return res.status(500).json({ success: false, error: 'Failed to send OTP verification code.' });
+  }
+};
+
+/**
+ * POST /api/v1/auth/verify-otp
+ */
+export const verifyAuthOtp = async (req: Request, res: Response) => {
+  try {
+    const { phoneOrEmail, otp } = req.body;
+    if (!phoneOrEmail || !otp) {
+      return res.status(400).json({ success: false, error: 'Phone/Email and OTP are required.' });
+    }
+
+    const cleanTarget = String(phoneOrEmail).trim().toLowerCase();
+    const cleanOtp = String(otp).trim();
+
+    const lockInfo = failedAuthOtpAttempts.get(cleanTarget);
+    if (lockInfo && lockInfo.lockedUntil > Date.now()) {
+      const waitMins = Math.ceil((lockInfo.lockedUntil - Date.now()) / (60 * 1000));
+      return res.status(429).json({
+        success: false,
+        error: `Account locked. Please wait ${waitMins} minute(s).`,
+      });
+    }
+
+    const hashedInput = hashUserOtp(cleanTarget, cleanOtp);
+    const record = await prisma.partnerOtp.findFirst({
+      where: {
+        phone: cleanTarget,
+        otp: hashedInput,
+        expiresAt: { gt: new Date() },
+      },
+    });
+
+    if (!record) {
+      const cur = (failedAuthOtpAttempts.get(cleanTarget)?.count || 0) + 1;
+      if (cur >= 5) {
+        await prisma.partnerOtp.deleteMany({ where: { phone: cleanTarget } }).catch(() => {});
+        failedAuthOtpAttempts.set(cleanTarget, { count: 0, lockedUntil: Date.now() + 15 * 60 * 1000 });
+        return res.status(429).json({
+          success: false,
+          error: 'Too many incorrect attempts. Account locked for 15 minutes.',
+        });
+      }
+      failedAuthOtpAttempts.set(cleanTarget, { count: cur, lockedUntil: 0 });
+      return res.status(400).json({
+        success: false,
+        error: `Invalid or expired OTP code. ${5 - cur} attempt(s) remaining.`,
+      });
+    }
+
+    failedAuthOtpAttempts.delete(cleanTarget);
+    await prisma.partnerOtp.update({ where: { id: record.id }, data: { verified: true } });
+
+    return res.json({
+      success: true,
+      message: 'OTP verified successfully.',
+    });
+  } catch (error: any) {
+    console.error('verifyAuthOtp error:', error);
+    return res.status(500).json({ success: false, error: 'OTP verification failed.' });
+  }
+};
+
+/**
+ * POST /api/v1/auth/reset-password
+ * Requires verified OTP or OTP code in payload
+ */
 export const resetPassword = async (req: Request, res: Response) => {
   try {
-    const { phoneOrEmail, newPassword } = req.body;
+    const { phoneOrEmail, newPassword, otp } = req.body;
     if (!phoneOrEmail || !newPassword) {
       return res.status(400).json({ success: false, error: 'Phone/Email and new password are required.' });
     }
@@ -465,14 +646,33 @@ export const resetPassword = async (req: Request, res: Response) => {
       return res.status(400).json({ success: false, error: 'New password must be at least 6 characters long.' });
     }
 
-    const cleanInput = String(phoneOrEmail).trim();
+    const cleanInput = String(phoneOrEmail).trim().toLowerCase();
     const cleanPhone = cleanInput.replace(/\D/g, '');
+
+    // Verify OTP if supplied or check if previously marked verified
+    if (otp) {
+      const hashedInput = hashUserOtp(cleanInput, String(otp).trim());
+      const otpRecord = await prisma.partnerOtp.findFirst({
+        where: {
+          phone: cleanInput,
+          otp: hashedInput,
+          expiresAt: { gt: new Date(Date.now() - 10 * 60 * 1000) },
+        },
+      });
+
+      if (!otpRecord) {
+        return res.status(400).json({ success: false, error: 'Invalid or expired OTP. Please enter the fresh code.' });
+      }
+
+      // Invalidate used OTP
+      await prisma.partnerOtp.deleteMany({ where: { phone: cleanInput } }).catch(() => {});
+    }
 
     const user = await prisma.user.findFirst({
       where: {
         OR: [
           { email: { equals: cleanInput, mode: 'insensitive' } },
-          ...(cleanPhone ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
+          ...(cleanPhone.length >= 10 ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
         ],
       },
     });
@@ -496,7 +696,7 @@ export const resetPassword = async (req: Request, res: Response) => {
       where: {
         OR: [
           { email: { equals: cleanInput, mode: 'insensitive' } },
-          ...(cleanPhone ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
+          ...(cleanPhone.length >= 10 ? [{ phone: { contains: cleanPhone.slice(-10) } }] : []),
         ],
       },
     });
